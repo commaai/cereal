@@ -57,7 +57,7 @@ int msgq_msg_init_size(msgq_msg_t *msg, size_t size);
 int msgq_msg_init_data(msgq_msg_t *msg, char * data, size_t size);
 int msgq_msg_close(msgq_msg_t *msg);
 
-int msgq_new_queue(msgq_queue_t * q, const char * path, size_t size);
+int msgq_new_queue(msgq_queue_t * q, const char * path, size_t size, bool preallocate = false);
 void msgq_close_queue(msgq_queue_t *q);
 void msgq_init_publisher(msgq_queue_t * q);
 void msgq_init_subscriber(msgq_queue_t * q);
