@@ -72,7 +72,7 @@ services: dict[str, tuple] = {
   "managerState": (True, 2., 1),
   "uploaderState": (True, 0., 1),
   "navInstruction": (True, 1., 10),
-  "navRoute": (True, 0.),
+  "navRoute": (True, 0., 1),
   "navThumbnail": (True, 0.),
   "navModel": (True, 2., 4.),
   "mapRenderState": (True, 2., 1.),
