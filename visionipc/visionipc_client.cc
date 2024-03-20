@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <chrono>
 #include <cassert>
 #include <iostream>
@@ -118,16 +119,22 @@ std::set<VisionStreamType> VisionIpcClient::getAvailableStreams(const std::strin
   if (socket_fd < 0) {
     return {};
   }
+
   // Send VISION_STREAM_MAX to server to request available streams
+  std::set<VisionStreamType> result;
   int request = VISION_STREAM_MAX;
   int r = ipc_sendrecv_with_fds(true, socket_fd, &request, sizeof(request), nullptr, 0, nullptr);
-  assert(r == sizeof(request));
-
-  VisionStreamType available_streams[VISION_STREAM_MAX] = {};
-  r = ipc_sendrecv_with_fds(false, socket_fd, &available_streams, sizeof(available_streams), nullptr, 0, nullptr);
-  assert((r >= 0) && (r % sizeof(VisionStreamType) == 0));
+  if (r > 0) {
+    assert(r == sizeof(request));
+    VisionStreamType available_streams[VISION_STREAM_MAX] = {};
+    r = ipc_sendrecv_with_fds(false, socket_fd, &available_streams, sizeof(available_streams), nullptr, 0, nullptr);
+    if (r > 0) {
+      assert((r % sizeof(VisionStreamType) == 0));
+      std::copy(available_streams, available_streams + r / sizeof(VisionStreamType), std::inserter(result, result.end()));
+    }
+  }
   close(socket_fd);
-  return std::set<VisionStreamType>(available_streams, available_streams + r / sizeof(VisionStreamType));
+  return result;
 }
 
 VisionIpcClient::~VisionIpcClient(){
