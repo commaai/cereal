@@ -38,7 +38,8 @@ ENV PATH="/root/.pyenv/bin:/root/.pyenv/shims:${PATH}"
 RUN pyenv install 3.11.4 && \
     pyenv global 3.11.4 && \
     pyenv rehash && \
-    pip3 install --no-cache-dir pyyaml Cython scons pycapnp pre-commit ruff parameterized coverage numpy
+    pip3 install --no-cache-dir pyyaml Cython scons pycapnp pre-commit ruff parameterized coverage numpy \
+                                git+https://github.com/jnewb1/capnp-stub-generator.git@8aa0cc8b530f83843ddcfa08a12e78da61f7780b
 
 WORKDIR /project/
 RUN cd /tmp/ && \
