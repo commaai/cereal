@@ -1132,29 +1132,6 @@ struct LateralPlan @0xe1e9318e2ae8b51e {
     u @1 :List(Float32);
   }
 
-  enum Desire {
-    none @0;
-    turnLeft @1;
-    turnRight @2;
-    laneChangeLeft @3;
-    laneChangeRight @4;
-    keepLeft @5;
-    keepRight @6;
-  }
-
-  enum LaneChangeState {
-    off @0;
-    preLaneChange @1;
-    laneChangeStarting @2;
-    laneChangeFinishing @3;
-  }
-
-  enum LaneChangeDirection {
-    none @0;
-    left @1;
-    right @2;
-  }
-
   # deprecated
   curvatureDEPRECATED @22 :Float32;
   curvatureRateDEPRECATED @23 :Float32;
