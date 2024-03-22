@@ -2018,22 +2018,35 @@ struct Boot {
 
 struct LiveParametersData {
   valid @0 :Bool;
-  gyroBias @1 :Float32;
-  angleOffsetDeg @2 :Float32;
-  angleOffsetAverageDeg @3 :Float32;
-  stiffnessFactor @4 :Float32;
-  steerRatio @5 :Float32;
   sensorValid @6 :Bool;
-  posenetSpeed @8 :Float32;
-  posenetValid @9 :Bool;
-  angleOffsetFastStd @10 :Float32;
-  angleOffsetAverageStd @11 :Float32;
-  stiffnessFactorStd @12 :Float32;
-  steerRatioStd @13 :Float32;
-  roll @14 :Float32;
   filterState @15 :LiveLocationKalman.Measurement;
+  steerRatio @16 :Measurement;
+  stiffnessFactor @17 :Measurement;
+  angleOffsetAverageDeg @18 :Measurement;
+  angleOffsetFastDeg @19 :Measurement;
+  angleOffsetDeg @20 :Measurement;
+  yawRate @21 :Measurement;
+  roll @22 :Measurement;
 
   yawRateDEPRECATED @7 :Float32;
+  gyroBiasDEPRECATED @1 :Float32;
+  angleOffsetDegDEPRECATED @2 :Float32;
+  angleOffsetAverageDegDEPRECATED @3 :Float32;
+  stiffnessFactorDEPRECATED @4 :Float32;
+  steerRatioDEPRECATED @5 :Float32;
+  posenetSpeedDEPRECATED @8 :Float32;
+  posenetValidDEPRECATED @9 :Bool;
+  angleOffsetFastStdDEPRECATED @10 :Float32;
+  angleOffsetAverageStdDEPRECATED @11 :Float32;
+  stiffnessFactorStdDEPRECATED @12 :Float32;
+  steerRatioStdDEPRECATED @13 :Float32;
+  rollDEPRECATED @14 :Float32;
+
+  struct Measurement {
+    value @0 :Float32;
+    std @1 :Float32;
+    valid @2 :Bool;
+  }
 }
 
 struct LiveTorqueParametersData {
