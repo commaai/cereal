@@ -124,4 +124,18 @@ def build_header():
 
 
 if __name__ == "__main__":
-  print(build_header())
+  #print(build_header())
+
+  # get ms
+  import capnp
+  from cereal import log
+  for k, v in SERVICE_LIST.items():
+    sz = None
+    dat = log.Event.new_message()
+    try:
+      dat.init(k)
+      sz = dat.total_size.word_count*8
+    except capnp.lib.capnp.KjException:
+      # TODO: lists
+      pass
+    print(k.ljust(30), sz)
