@@ -1,25 +1,17 @@
 #include <cassert>
 #include <cstring>
 #include <iostream>
-#include <cstdlib>
+#include <chrono>
 #include <csignal>
-#include <cerrno>
 
 #include "cereal/services.h"
 #include "cereal/messaging/impl_msgq.h"
 
-
-volatile sig_atomic_t msgq_do_exit = 0;
-
-void sig_handler(int signal) {
-  assert(signal == SIGINT || signal == SIGTERM);
-  msgq_do_exit = 1;
-}
+using namespace std::chrono;
 
 static bool service_exists(std::string path){
   return services.count(path) > 0;
 }
-
 
 MSGQContext::MSGQContext() {
 }
@@ -79,61 +71,43 @@ int MSGQSubSocket::connect(Context *context, std::string endpoint, std::string a
   return 0;
 }
 
-
-Message * MSGQSubSocket::receive(bool non_blocking){
-  msgq_do_exit = 0;
-
-  void (*prev_handler_sigint)(int);
-  void (*prev_handler_sigterm)(int);
-  if (!non_blocking){
-    prev_handler_sigint = std::signal(SIGINT, sig_handler);
-    prev_handler_sigterm = std::signal(SIGTERM, sig_handler);
-  }
-
+Message *MSGQSubSocket::receive(bool non_blocking) {
   msgq_msg_t msg;
-
-  MSGQMessage *r = NULL;
-
   int rc = msgq_msg_recv(&msg, q);
 
-  // Hack to implement blocking read with a poller. Don't use this
-  while (!non_blocking && rc == 0 && msgq_do_exit == 0){
-    msgq_pollitem_t items[1];
-    items[0].q = q;
+  if (rc == 0 && !non_blocking) {
+    sigset_t mask;
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGINT);
+    sigaddset(&mask, SIGTERM);
+    sigprocmask(SIG_BLOCK, &mask, nullptr);
 
-    int t = (timeout != -1) ? timeout : 100;
+    int64_t timieout_ns = ((timeout != -1) ? timeout : 100) * 1000000;
+    auto start = steady_clock::now();
 
-    int n = msgq_poll(items, 1, t);
-    rc = msgq_msg_recv(&msg, q);
+    // Continue receiving messages until timeout or interruption by SIGINT or SIGTERM
+    while (rc == 0 && timieout_ns > 0) {
+      struct timespec ts {timieout_ns / 1000000000, timieout_ns % 1000000000};
+      int ret = sigtimedwait(&mask, nullptr, &ts);
+      if (ret == SIGINT || ret == SIGTERM) {
+        raise(ret);  // Raise the signal again to ensure it's not missed
+        break;       // Exit the loop
+      } else if (ret == -1 && errno == EAGAIN && timeout != -1) {
+        break;  // Timed out
+      }
 
-    // The poll indicated a message was ready, but the receive failed. Try again
-    if (n == 1 && rc == 0){
-      continue;
+      rc = msgq_msg_recv(&msg, q);
+      timieout_ns -= (timeout == -1 ? 0 : duration_cast<nanoseconds>(steady_clock::now() - start).count());
     }
-
-    if (timeout != -1){
-      break;
-    }
+    sigprocmask(SIG_UNBLOCK, &mask, nullptr);
   }
 
-
-  if (!non_blocking){
-    std::signal(SIGINT, prev_handler_sigint);
-    std::signal(SIGTERM, prev_handler_sigterm);
+  if (rc > 0) {
+    MSGQMessage *r = new MSGQMessage;
+    r->takeOwnership(msg.data, msg.size);
+    return r;
   }
-
-  errno = msgq_do_exit ? EINTR : 0;
-
-  if (rc > 0){
-    if (msgq_do_exit){
-      msgq_msg_close(&msg); // Free unused message on exit
-    } else {
-      r = new MSGQMessage;
-      r->takeOwnership(msg.data, msg.size);
-    }
-  }
-
-  return (Message*)r;
+  return nullptr;
 }
 
 void MSGQSubSocket::setTimeout(int t){
