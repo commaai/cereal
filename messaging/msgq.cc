@@ -25,6 +25,17 @@
 
 #include "msgq/messaging/msgq.h"
 
+
+#define HANDLE_EINTR(x)                                        \
+  ({                                                           \
+    decltype(x) ret_;                                          \
+    int try_cnt = 0;                                           \
+    do {                                                       \
+      ret_ = (x);                                              \
+    } while (ret_ == -1 && errno == EINTR && try_cnt++ < 100); \
+    ret_;                                                       \
+  })
+
 void sigusr2_handler(int signal) {
   assert(signal == SIGUSR2);
 }
@@ -37,7 +48,7 @@ uint64_t msgq_get_uid(void){
     // TODO: this doesn't work
     uint64_t uid = distribution(rd) << 32 | getpid();
   #else
-    uint64_t uid = distribution(rd) << 32 | syscall(SYS_gettid);
+    uint64_t uid = distribution(rd) << 32 | HANDLE_EINTR(syscall(SYS_gettid));
   #endif
 
   return uid;
@@ -83,7 +94,7 @@ void msgq_wait_for_subscriber(msgq_queue_t *q){
   return;
 }
 
-int msgq_new_queue(msgq_queue_t * q, const char * path, size_t size){
+int msgq_new_queue(msgq_queue_t * q, const char * path, size_t size, bool preallocate) {
   assert(size < 0xFFFFFFFF); // Buffer must be smaller than 2^32 bytes
   std::signal(SIGUSR2, sigusr2_handler);
 
@@ -94,17 +105,26 @@ int msgq_new_queue(msgq_queue_t * q, const char * path, size_t size){
   }
   full_path += path;
 
-  auto fd = open(full_path.c_str(), O_RDWR | O_CREAT, 0664);
+  auto fd = HANDLE_EINTR(open(full_path.c_str(), O_RDWR | O_CREAT, 0664));
   if (fd < 0) {
     std::cout << "Warning, could not open: " << full_path << std::endl;
     return -1;
   }
 
-  int rc = ftruncate(fd, size + sizeof(msgq_header_t));
+  int rc = HANDLE_EINTR(ftruncate(fd, size + sizeof(msgq_header_t)));
   if (rc < 0){
     close(fd);
     return -1;
   }
+
+  if (preallocate && (std::getenv("MSGQ_PREALLOCATE") != nullptr)) {
+    rc = HANDLE_EINTR(fallocate(fd, 0, 0, size + sizeof(msgq_header_t)));
+    if (rc < 0){
+      close(fd);
+      return -1;
+    }
+  }
+
   char * mem = (char*)mmap(NULL, size + sizeof(msgq_header_t), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
   close(fd);
 
