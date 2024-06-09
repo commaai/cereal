@@ -3,6 +3,7 @@
 #include <cassert>
 #include <random>
 #include <limits>
+#include <utility>
 
 #include <poll.h>
 #include <sys/socket.h>
@@ -62,6 +63,8 @@ void VisionIpcServer::create_buffers(VisionStreamType type, size_t num_buffers, 
 
 void VisionIpcServer::create_buffers_with_sizes(VisionStreamType type, size_t num_buffers, bool rgb, size_t width, size_t height, size_t size, size_t stride, size_t uv_offset) {
   // Create map + alloc requested buffers
+  std::vector<VisionBuf *> tmp_buffers;
+  tmp_buffers.reserve(num_buffers);
   for (size_t i = 0; i < num_buffers; i++){
     VisionBuf* buf = new VisionBuf();
     buf->allocate(size);
@@ -71,12 +74,12 @@ void VisionIpcServer::create_buffers_with_sizes(VisionStreamType type, size_t nu
     if (device_id) buf->init_cl(device_id, ctx);
 
     rgb ? buf->init_rgb(width, height, stride) : buf->init_yuv(width, height, stride, uv_offset);
-
-    buffers[type].push_back(buf);
+    tmp_buffers.push_back(buf);
   }
 
+  std::unique_lock lk(lock);
+  buffers[type] = std::move(tmp_buffers);
   cur_idx[type] = 0;
-
   // Create msgq publisher for each of the `name` + type combos
   // TODO: compute port number directly if using zmq
   sockets[type] = PubSocket::create(msg_ctx, get_endpoint_name(name, type), false);
@@ -170,7 +173,7 @@ void VisionIpcServer::listener(){
 VisionBuf * VisionIpcServer::get_buffer(VisionStreamType type){
   // Do we want to keep track if the buffer has been sent out yet and warn user?
   assert(buffers.count(type));
-  auto b = buffers[type];
+  auto &b = buffers.at(type);
   return b[cur_idx[type]++ % b.size()];
 }
 
@@ -181,7 +184,7 @@ void VisionIpcServer::send(VisionBuf * buf, VisionIpcBufExtra * extra, bool sync
     }
   }
   assert(buffers.count(buf->type));
-  assert(buf->idx < buffers[buf->type].size());
+  assert(buf->idx < buffers.at(buf->type).size());
 
   // Send over correct msgq socket
   VisionIpcPacket packet = {0};
@@ -189,7 +192,7 @@ void VisionIpcServer::send(VisionBuf * buf, VisionIpcBufExtra * extra, bool sync
   packet.idx = buf->idx;
   packet.extra = *extra;
 
-  sockets[buf->type]->send((char*)&packet, sizeof(packet));
+  sockets.at(buf->type)->send((char*)&packet, sizeof(packet));
 }
 
 VisionIpcServer::~VisionIpcServer(){

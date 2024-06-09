@@ -4,6 +4,7 @@
 #include <thread>
 #include <atomic>
 #include <map>
+#include <mutex>
 
 #include "msgq/messaging/messaging.h"
 #include "msgq/visionipc/visionbuf.h"
@@ -13,6 +14,7 @@ std::string get_ipc_path(const std::string &name);
 
 class VisionIpcServer {
  private:
+  std::mutex lock;
   cl_device_id device_id = nullptr;
   cl_context ctx = nullptr;
   uint64_t server_id;
