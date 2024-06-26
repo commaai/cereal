@@ -134,7 +134,7 @@ void VisionIpcServer::listener(){
     }
 
     if (buffers.count(type) <= 0) {
-      std::cout << "got request for invalid buffer type: " << type << std::endl;
+      // std::cout << "got request for invalid buffer type: " << type << std::endl;
       close(fd);
       continue;
     }
