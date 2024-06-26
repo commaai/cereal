@@ -429,6 +429,10 @@ int msgq_poll(msgq_pollitem_t * items, size_t nitems, int timeout){
     if (items[i].revents) num++;
   }
 
+  if (num > 0 || timeout == 0) {
+    return num;
+  }
+
   int ms = (timeout == -1) ? 100 : timeout;
   struct timespec ts;
   ts.tv_sec = ms / 1000;
@@ -436,9 +440,7 @@ int msgq_poll(msgq_pollitem_t * items, size_t nitems, int timeout){
 
 
   while (num == 0) {
-    int ret;
-
-    ret = nanosleep(&ts, &ts);
+    int ret = nanosleep(&ts, &ts);
 
     // Check if messages ready
     for (size_t i = 0; i < nitems; i++) {
