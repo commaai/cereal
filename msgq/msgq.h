@@ -1,9 +1,9 @@
 #pragma once
 
-#include <cstdint>
 #include <cstring>
 #include <string>
 #include <atomic>
+#include <memory>
 
 #define DEFAULT_SEGMENT_SIZE (10 * 1024 * 1024)
 #define NUM_READERS 15
@@ -13,10 +13,42 @@
 #define UNPACK64(higher, lower, input) do {uint64_t tmp = input; higher = tmp >> 32; lower = tmp & 0xFFFFFFFF;} while (0)
 #define PACK64(output, higher, lower) output = ((uint64_t)higher << 32) | ((uint64_t)lower & 0xFFFFFFFF)
 
+struct SharedMemoryHeader {
+  pthread_mutex_t mutex;
+  pthread_cond_t cond;
+  bool initialized;
+};
+
+class SharedMemory {
+public:
+  SharedMemory(const std::string &name, size_t size);
+  ~SharedMemory();
+  void notifyAll();
+  bool waitFor(int timeout_ms);
+  void *shm_ptr;
+  size_t shm_size;
+  SharedMemoryHeader *header;
+
+private:
+  void initMutexCond();
+  std::string shm_name;
+  int shm_fd;
+};
+
+struct PollerContext {
+  PollerContext();
+  SharedMemory shm;
+  SharedMemoryHeader *ctx;
+};
+
+extern PollerContext poller_context;
+
 struct  msgq_header_t {
   uint64_t num_readers;
   uint64_t write_pointer;
   uint64_t write_uid;
+  pthread_mutex_t mutex;
+  pthread_cond_t cond;
   uint64_t read_pointers[NUM_READERS];
   uint64_t read_valids[NUM_READERS];
   uint64_t read_uids[NUM_READERS];
@@ -29,7 +61,6 @@ struct msgq_queue_t {
   std::atomic<uint64_t> *read_pointers[NUM_READERS];
   std::atomic<uint64_t> *read_valids[NUM_READERS];
   std::atomic<uint64_t> *read_uids[NUM_READERS];
-  char * mmap_p;
   char * data;
   size_t size;
   int reader_id;
@@ -38,6 +69,7 @@ struct msgq_queue_t {
 
   bool read_conflate;
   std::string endpoint;
+  std::unique_ptr<SharedMemory> shm;
 };
 
 struct msgq_msg_t {

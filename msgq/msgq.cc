@@ -1,33 +1,119 @@
+#include "msgq/msgq.h"
+
 #include <iostream>
 #include <cassert>
 #include <cerrno>
+#include <chrono>
 #include <cmath>
-#include <cstring>
-#include <cstdint>
 #include <chrono>
 #include <algorithm>
-#include <cstdlib>
-#include <csignal>
 #include <random>
-#include <string>
 #include <limits>
+#include <semaphore.h>
 
-#include <poll.h>
-#include <sys/ioctl.h>
 #include <sys/mman.h>
-#include <sys/stat.h>
-#include <sys/types.h>
 #include <sys/syscall.h>
 #include <fcntl.h>
 #include <unistd.h>
 
-#include <stdio.h>
+constexpr const char *SHM_INIT_SEM = "/op_shm_init_sem";
 
-#include "msgq/msgq.h"
+SharedMemory::SharedMemory(const std::string &name, size_t size) :shm_name(name) {
+  const char* prefix = std::getenv("OPENPILOT_PREFIX");
+  std::string full_path = "/dev/shm/";
+  if (prefix) {
+    full_path += std::string(prefix) + "/";
+  }
+  full_path += shm_name;
+  shm_fd = open(full_path.c_str(), O_RDWR | O_CREAT, 0664);
+  assert(shm_fd != -1);
 
-void sigusr2_handler(int signal) {
-  assert(signal == SIGUSR2);
+  shm_size = sizeof(SharedMemoryHeader) + size;
+  int ret = ftruncate(shm_fd, shm_size);
+  assert(ret != -1);
+  shm_ptr = mmap(0, shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+  assert(shm_ptr != MAP_FAILED);
+
+  initMutexCond();
 }
+
+SharedMemory::~SharedMemory() {
+  munmap(shm_ptr, shm_size);
+  ::close(shm_fd);
+}
+
+void SharedMemory::initMutexCond() {
+  sem_t *sem = sem_open(SHM_INIT_SEM, O_CREAT, 0644, 1);
+  assert(sem != SEM_FAILED);
+  sem_wait(sem);  // Lock semaphore
+
+  // Initialize the header if it hasn't been initialized yet
+  header = (SharedMemoryHeader *)shm_ptr;
+  if (!header->initialized) {
+    pthread_mutexattr_t mutex_attr;
+    pthread_mutexattr_init(&mutex_attr);
+    pthread_mutexattr_setpshared(&mutex_attr, PTHREAD_PROCESS_SHARED);
+#ifndef __APPLE__
+    // Set the mutex to be robust, meaning it can recover from a process crash
+    pthread_mutexattr_setrobust(&mutex_attr, PTHREAD_MUTEX_ROBUST);
+#endif
+    pthread_mutex_init(&(header->mutex), &mutex_attr);
+
+    pthread_condattr_t cond_attr;
+    pthread_condattr_init(&cond_attr);
+    pthread_condattr_setpshared(&cond_attr, PTHREAD_PROCESS_SHARED);
+    pthread_cond_init(&(header->cond), &cond_attr);
+
+    pthread_mutexattr_destroy(&mutex_attr);
+    pthread_condattr_destroy(&cond_attr);
+    header->initialized = true;
+  }
+
+  sem_post(sem);
+  sem_close(sem);
+}
+
+void SharedMemory::notifyAll() {
+  int ret = pthread_mutex_lock(&(header->mutex));
+#ifndef __APPLE__
+  // Handle case where previous owner of the mutex died
+  if (ret == EOWNERDEAD) {
+    pthread_mutex_consistent((&(header->mutex)));
+  }
+#endif
+  pthread_cond_broadcast(&(header->cond));
+  pthread_mutex_unlock(&(header->mutex));
+}
+
+bool SharedMemory::waitFor(int timeout_ms) {
+  struct timespec ts;
+  clock_gettime(CLOCK_REALTIME, &ts);
+  ts.tv_sec += (timeout_ms / 1000);
+  ts.tv_nsec += (timeout_ms % 1000) * 1000000;
+  if (ts.tv_nsec >= 1000000000) {
+    ts.tv_sec += 1;
+    ts.tv_nsec -= 1000000000;
+  }
+
+  int ret = pthread_mutex_lock(&(header->mutex));
+#ifndef __APPLE__
+  // Handle case where previous owner of the mutex died
+  if (ret == EOWNERDEAD) {
+    pthread_mutex_consistent((&(header->mutex)));
+  }
+#endif
+  ret = pthread_cond_timedwait(&(header->cond), &(header->mutex), &ts);
+  pthread_mutex_unlock(&(header->mutex));
+
+  // Return true if condition was signaled, false if timed out
+  return ret == 0;
+}
+
+PollerContext::PollerContext() : shm("msgq_poll", 0) {
+  ctx = (SharedMemoryHeader *)shm.shm_ptr;
+}
+
+PollerContext poller_context;
 
 uint64_t msgq_get_uid(void){
   std::random_device rd("/dev/urandom");
@@ -53,7 +139,6 @@ int msgq_msg_init_size(msgq_msg_t * msg, size_t size){
 
 int msgq_msg_init_data(msgq_msg_t * msg, char * data, size_t size) {
   int r = msgq_msg_init_size(msg, size);
-
   if (r == 0)
     memcpy(msg->data, data, size);
 
@@ -79,41 +164,13 @@ void msgq_wait_for_subscriber(msgq_queue_t *q){
   while (*q->num_readers == 0){
     // wait for subscriber
   }
-
   return;
 }
 
 int msgq_new_queue(msgq_queue_t * q, const char * path, size_t size){
   assert(size < 0xFFFFFFFF); // Buffer must be smaller than 2^32 bytes
-  std::signal(SIGUSR2, sigusr2_handler);
-
-  std::string full_path = "/dev/shm/";
-  const char* prefix = std::getenv("OPENPILOT_PREFIX");
-  if (prefix) {
-    full_path += std::string(prefix) + "/";
-  }
-  full_path += path;
-
-  auto fd = open(full_path.c_str(), O_RDWR | O_CREAT, 0664);
-  if (fd < 0) {
-    std::cout << "Warning, could not open: " << full_path << std::endl;
-    return -1;
-  }
-
-  int rc = ftruncate(fd, size + sizeof(msgq_header_t));
-  if (rc < 0){
-    close(fd);
-    return -1;
-  }
-  char * mem = (char*)mmap(NULL, size + sizeof(msgq_header_t), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-  close(fd);
-
-  if (mem == NULL){
-    return -1;
-  }
-  q->mmap_p = mem;
-
-  msgq_header_t *header = (msgq_header_t *)mem;
+  q->shm = std::make_unique<SharedMemory>(path, size + sizeof(msgq_header_t));
+  msgq_header_t *header = (msgq_header_t*)(q->shm->header + 1);
 
   // Setup pointers to header segment
   q->num_readers = reinterpret_cast<std::atomic<uint64_t>*>(&header->num_readers);
@@ -126,7 +183,7 @@ int msgq_new_queue(msgq_queue_t * q, const char * path, size_t size){
     q->read_uids[i] = reinterpret_cast<std::atomic<uint64_t>*>(&header->read_uids[i]);
   }
 
-  q->data = mem + sizeof(msgq_header_t);
+  q->data = (char*)(header + 1);
   q->size = size;
   q->reader_id = -1;
 
@@ -136,12 +193,7 @@ int msgq_new_queue(msgq_queue_t * q, const char * path, size_t size){
   return 0;
 }
 
-void msgq_close_queue(msgq_queue_t *q){
-  if (q->mmap_p != NULL){
-    munmap(q->mmap_p, q->size + sizeof(msgq_header_t));
-  }
-}
-
+void msgq_close_queue(msgq_queue_t *q) {}
 
 void msgq_init_publisher(msgq_queue_t * q) {
   //std::cout << "Starting publisher" << std::endl;
@@ -156,15 +208,6 @@ void msgq_init_publisher(msgq_queue_t * q) {
   }
 
   q->write_uid_local = uid;
-}
-
-static void thread_signal(uint32_t tid) {
-  #ifndef SYS_tkill
-    // TODO: this won't work for multithreaded programs
-    kill(tid, SIGUSR2);
-  #else
-    syscall(SYS_tkill, tid, SIGUSR2);
-  #endif
 }
 
 void msgq_init_subscriber(msgq_queue_t * q) {
@@ -185,13 +228,11 @@ void msgq_init_subscriber(msgq_queue_t * q) {
 
       for (size_t i = 0; i < NUM_READERS; i++){
         *q->read_valids[i] = false;
-
-        uint64_t old_uid = *q->read_uids[i];
         *q->read_uids[i] = 0;
-
         // Wake up reader in case they are in a poll
-        thread_signal(old_uid & 0xFFFFFFFF);
+        q->shm->notifyAll();
       }
+      poller_context.shm.notifyAll();
 
       continue;
     }
@@ -292,12 +333,9 @@ int msgq_msg_send(msgq_msg_t * msg, msgq_queue_t *q){
   uint32_t new_ptr = ALIGN(write_pointer + msg->size + sizeof(int64_t));
   PACK64(*q->write_pointer, write_cycles, new_ptr);
 
-  // Notify readers
-  for (uint64_t i = 0; i < num_readers; i++){
-    uint64_t reader_uid = *q->read_uids[i];
-    thread_signal(reader_uid & 0xFFFFFFFF);
-  }
-
+  // Notify pollers and readers
+  poller_context.shm.notifyAll();
+  q->shm->notifyAll();
   return msg->size;
 }
 
@@ -418,42 +456,21 @@ int msgq_msg_recv(msgq_msg_t * msg, msgq_queue_t * q){
   return msg->size;
 }
 
-
-
-int msgq_poll(msgq_pollitem_t * items, size_t nitems, int timeout){
+int msgq_poll(msgq_pollitem_t *items, size_t nitems, int timeout) {
   int num = 0;
-
-  // Check if messages ready
-  for (size_t i = 0; i < nitems; i++) {
-    items[i].revents = msgq_msg_ready(items[i].q);
-    if (items[i].revents) num++;
-  }
-
   int ms = (timeout == -1) ? 100 : timeout;
-  struct timespec ts;
-  ts.tv_sec = ms / 1000;
-  ts.tv_nsec = (ms % 1000) * 1000 * 1000;
 
-
-  while (num == 0) {
-    int ret;
-
-    ret = nanosleep(&ts, &ts);
-
+  while (true) {
     // Check if messages ready
-    for (size_t i = 0; i < nitems; i++) {
-      if (items[i].revents == 0 && msgq_msg_ready(items[i].q)){
-        num += 1;
-        items[i].revents = 1;
-      }
+    for (size_t i = 0; i < nitems; ++i) {
+      items[i].revents = msgq_msg_ready(items[i].q);
+      if (items[i].revents) ++num;
     }
+    if (num > 0 || timeout == 0) break;
 
-    // exit if we had a timeout and the sleep finished
-    if (timeout != -1 && ret == 0){
-      break;
-    }
+     // Wait until messages are ready or timeout occurs
+    if (!poller_context.shm.waitFor(ms) && timeout != -1) break;
   }
-
   return num;
 }
 
