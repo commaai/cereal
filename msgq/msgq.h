@@ -7,6 +7,7 @@
 
 #define DEFAULT_SEGMENT_SIZE (1 * 1024 * 1024)
 #define NUM_READERS 25
+#define NUM_WAITERS 32
 #define ALIGN(n) ((n + (8 - 1)) & -8)
 
 #define UNUSED(x) (void)x
@@ -20,6 +21,7 @@ struct  msgq_header_t {
   uint64_t read_pointers[NUM_READERS];
   uint64_t read_valids[NUM_READERS];
   uint64_t read_uids[NUM_READERS];
+  uint64_t waiters[NUM_WAITERS];
 };
 
 struct msgq_queue_t {
@@ -29,7 +31,8 @@ struct msgq_queue_t {
   std::atomic<uint64_t> *read_pointers[NUM_READERS];
   std::atomic<uint64_t> *read_valids[NUM_READERS];
   std::atomic<uint64_t> *read_uids[NUM_READERS];
-  char * mmap_p;
+  std::atomic<uint64_t> *waiters[NUM_WAITERS];
+  char * mmap_p = nullptr;
   char * data;
   size_t size;
   int reader_id;
@@ -38,6 +41,7 @@ struct msgq_queue_t {
 
   bool read_conflate;
   std::string endpoint;
+  int send_fd = -1;
 };
 
 struct msgq_msg_t {
