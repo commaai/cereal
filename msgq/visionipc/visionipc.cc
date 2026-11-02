@@ -90,7 +90,11 @@ int ipc_sendrecv_with_fds(bool send, int fd, void *buf, size_t buf_size, int* fd
     return sendmsg(fd, &msg, 0);
   } else {
     int r = recvmsg(fd, &msg, 0);
-    if (r < 0) return r;
+    if (r <= 0) {
+      // r == 0: peer closed connection (EOF)
+      // r < 0: error occurred (check errno)
+      return r;
+    }
 
     int recv_fds = 0;
     if (msg.msg_controllen > 0) {
