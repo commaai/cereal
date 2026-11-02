@@ -58,9 +58,19 @@ static void wake_reader(const msgq_queue_t *q, int reader_id) {
   sockaddr_un addr;
   if (fd < 0 || !wake_addr(q, reader_id, &addr)) return;
 
-  // Failures are fine: either nobody is listening, or a wakeup is already pending
   char c = 0;
-  sendto(fd, &c, sizeof(c), 0, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
+  if (sendto(fd, &c, sizeof(c), 0, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) >= 0 ||
+      errno == ENOENT || errno == ECONNREFUSED) {
+    return;  // sent, or nobody is listening
+  }
+
+  // Unread datagrams count against the sender's buffer, so readers that stopped reading
+  // can fill up the shared socket. Retry with a fresh one. If that fails too, the
+  // reader's queue is full and a wakeup is already pending.
+  int tmp = socket(AF_UNIX, SOCK_DGRAM, 0);
+  if (tmp < 0) return;
+  sendto(tmp, &c, sizeof(c), MSG_DONTWAIT, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
+  close(tmp);
 }
 
 static void bind_wake_socket(msgq_queue_t *q) {
@@ -350,7 +360,7 @@ int msgq_msg_send(msgq_msg_t * msg, msgq_queue_t *q){
   // subscribed and started polling during this send isn't missed.
   num_readers = *q->num_readers;
   for (uint64_t i = 0; i < num_readers; i++){
-    if (*q->read_waiting[i]) {
+    if (q->read_waiting[i]->exchange(false)) {
       wake_reader(q, i);
     }
   }
@@ -483,18 +493,28 @@ int msgq_poll(msgq_pollitem_t * items, size_t nitems, int timeout){
 
   while (true) {
     int num = 0;
+    for (size_t i = 0; i < nitems; i++) {
+      items[i].revents = msgq_msg_ready(items[i].q);
+      num += items[i].revents;
+    }
+    if (num > 0) return num;
+
+    int timeout_ms = -1;
+    if (timeout >= 0) {
+      auto remaining = std::chrono::ceil<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now());
+      timeout_ms = std::max<int64_t>(remaining.count(), 0);
+      if (timeout_ms == 0) return 0;
+    }
+
     bool reconnected = false;
     bool can_block = true;
-
     for (size_t i = 0; i < nitems; i++) {
       msgq_queue_t *q = items[i].q;
-      assert(q->reader_id >= 0); // Make sure subscriber is initialized
       uint64_t uid = q->read_uid_local;
 
-      // Ask for a wakeup before checking, so a message sent in between isn't missed
+      // Ask for a wakeup before checking again, so a message sent in between isn't missed
       *q->read_waiting[q->reader_id] = true;
-      items[i].revents = msgq_msg_ready(q);
-      num += items[i].revents;
+      num += msgq_msg_ready(q);
 
       // The reader may have moved to a new slot that isn't armed yet
       reconnected |= (q->read_uid_local != uid);
@@ -502,13 +522,7 @@ int msgq_poll(msgq_pollitem_t * items, size_t nitems, int timeout){
       fds[i] = {q->wake_fd, POLLIN, 0};
     }
 
-    int timeout_ms = -1;
-    if (timeout >= 0) {
-      auto remaining = std::chrono::ceil<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now());
-      timeout_ms = std::max<int64_t>(remaining.count(), 0);
-    }
-
-    if (num == 0 && !reconnected && timeout_ms != 0) {
+    if (num == 0 && !reconnected) {
       // Without a wake socket, fall back to checking periodically
       int poll_ms = can_block ? timeout_ms : (timeout_ms < 0 ? 10 : std::min(timeout_ms, 10));
       poll(fds.data(), fds.size(), poll_ms);  // spurious wakeups and EINTR are handled by checking again
@@ -520,10 +534,6 @@ int msgq_poll(msgq_pollitem_t * items, size_t nitems, int timeout){
       if (fds[i].revents & POLLIN) {
         drain_wake_socket(fds[i].fd);
       }
-    }
-
-    if (num > 0 || timeout_ms == 0) {
-      return num;
     }
   }
 }

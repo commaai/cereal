@@ -578,3 +578,38 @@ TEST_CASE("msgq_poll reconnects to a new publisher")
   msgq_close_queue(&writer);
   msgq_close_queue(&reader);
 }
+
+TEST_CASE("msgq_poll wakes up despite a stuck reader")
+{
+  cleanup_test_queue();
+  msgq_queue_t writer, stuck, reader;
+  msgq_new_queue(&writer, "test_queue", 1024);
+  msgq_new_queue(&stuck, "test_queue", 1024);
+  msgq_new_queue(&reader, "test_queue", 1024);
+  msgq_init_publisher(&writer);
+  msgq_init_subscriber(&stuck);
+  msgq_init_subscriber(&reader);
+
+  // A reader that went to sleep in a poll, but never wakes up to read its socket
+  *stuck.read_waiting[stuck.reader_id] = true;
+  for (int i = 0; i < 1000; i++) {
+    send_later(&writer, 0).join();
+  }
+
+  msgq_pollitem_t items[] = {{&reader, 0}};
+  msgq_msg_t msg;
+  while (msgq_msg_recv(&msg, &reader) > 0) msgq_msg_close(&msg);
+
+  std::thread sender = send_later(&writer, 50);
+  auto start = std::chrono::steady_clock::now();
+  int n = msgq_poll(items, 1, 5000);
+  int64_t elapsed = millis_since(start);
+  sender.join();
+
+  REQUIRE(n == 1);
+  REQUIRE(elapsed < 1000);
+
+  msgq_close_queue(&writer);
+  msgq_close_queue(&stuck);
+  msgq_close_queue(&reader);
+}
