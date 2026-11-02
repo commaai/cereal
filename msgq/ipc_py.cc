@@ -38,6 +38,9 @@ void check_error(bool failed, int error, const std::string &endpoint = "") {
 }  // namespace
 
 NB_MODULE(_ipc, m) {
+  // Daemon threads can still hold sockets at exit.
+  nb::set_leak_warnings(false);
+
   nb::exception<IpcError> ipc_error(m, "IpcError");
   nb::exception<MultiplePublishersError>(m, "MultiplePublishersError", ipc_error);
 

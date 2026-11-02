@@ -29,6 +29,9 @@ using InputBuffer = nb::ndarray<const uint8_t, nb::ndim<1>, nb::device::cpu>;
 }  // namespace
 
 NB_MODULE(_visionipc, m) {
+  // Daemon threads can still hold clients and servers at exit.
+  nb::set_leak_warnings(false);
+
   m.def("get_endpoint_name", &get_endpoint_name, nb::arg("name"), nb::arg("stream"));
 
   nb::class_<VisionBuf>(m, "VisionBuf")
@@ -96,9 +99,10 @@ NB_MODULE(_visionipc, m) {
       return client.recv(&client.extra, timeout_ms);
     }, nb::arg("timeout_ms") = 100, nb::rv_policy::reference_internal,
        nb::sig("def recv(self, timeout_ms: int = 100) -> VisionBuf | None"))
+    // Holds the GIL: connect remaps the buffers other threads may be reading.
     .def("connect", [](PythonVisionIpcClient &client, bool blocking) {
       return client.connect(blocking);
-    }, nb::arg("blocking"), nb::call_guard<nb::gil_scoped_release>())
+    }, nb::arg("blocking"))
     .def("is_connected", [](PythonVisionIpcClient &client) { return client.is_connected(); })
     .def_static("available_streams", &VisionIpcClient::getAvailableStreams, nb::arg("name"), nb::arg("block"),
                 nb::call_guard<nb::gil_scoped_release>());
