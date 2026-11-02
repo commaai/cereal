@@ -1,5 +1,6 @@
 #include <chrono>
 #include <thread>
+#include <vector>
 
 #include "msgq/test_runner.h"
 #include "msgq/msgq.h"
