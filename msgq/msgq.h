@@ -42,6 +42,7 @@ struct msgq_queue_t {
   bool read_conflate;
   std::string endpoint;
   int wake_fd = -1;
+  int send_fd = -1;
 };
 
 struct msgq_msg_t {
