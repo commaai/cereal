@@ -23,8 +23,8 @@ class SConsBuildExt(build_ext):
 
 setup(
   ext_modules=[
-    Extension("msgq.ipc_pyx", sources=[]),
-    Extension("msgq.visionipc.visionipc_pyx", sources=[]),
+    Extension("msgq._ipc", sources=[]),
+    Extension("msgq.visionipc._visionipc", sources=[]),
   ],
   cmdclass={"build_ext": SConsBuildExt},
 )

@@ -7,8 +7,8 @@
 #include <nanobind/ndarray.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/set.h>
+#include <nanobind/stl/string.h>
 
-#include "msgq/python_helpers.h"
 #include "msgq/visionipc/visionbuf.h"
 #include "msgq/visionipc/visionipc.h"
 #include "msgq/visionipc/visionipc_client.h"
@@ -28,10 +28,8 @@ using InputBuffer = nb::ndarray<const uint8_t, nb::ndim<1>, nb::device::cpu>;
 
 }  // namespace
 
-NB_MODULE(visionipc_pyx, m) {
-  m.def("get_endpoint_name", [](const PythonString &name, VisionStreamType stream) {
-    return get_endpoint_name(python_string(name), stream);
-  }, nb::arg("name"), nb::arg("stream"));
+NB_MODULE(_visionipc, m) {
+  m.def("get_endpoint_name", &get_endpoint_name, nb::arg("name"), nb::arg("stream"));
 
   nb::class_<VisionBuf>(m, "VisionBuf")
     .def_prop_ro("data", [](VisionBuf &buf) { return Buffer(buf.addr, {buf.len}); }, nb::rv_policy::reference_internal,
@@ -45,9 +43,7 @@ NB_MODULE(visionipc_pyx, m) {
     .def_prop_ro("frame_id", &VisionBuf::get_frame_id);
 
   nb::class_<VisionIpcServer>(m, "VisionIpcServer")
-    .def("__init__", [](VisionIpcServer *self, const PythonString &name) {
-      new (self) VisionIpcServer(python_string(name));
-    }, nb::arg("name"))
+    .def(nb::init<std::string>(), nb::arg("name"))
     .def("create_buffers", &VisionIpcServer::create_buffers, nb::arg("tp"), nb::arg("num_buffers"), nb::arg("width"), nb::arg("height"))
     .def("create_buffers_with_sizes", &VisionIpcServer::create_buffers_with_sizes,
          nb::arg("tp"), nb::arg("num_buffers"), nb::arg("width"), nb::arg("height"), nb::arg("size"), nb::arg("stride"), nb::arg("uv_offset"))
@@ -74,9 +70,7 @@ NB_MODULE(visionipc_pyx, m) {
     .def("start_listener", &VisionIpcServer::start_listener);
 
   nb::class_<PythonVisionIpcClient>(m, "VisionIpcClient")
-    .def("__init__", [](PythonVisionIpcClient *self, const PythonString &name, VisionStreamType stream, bool conflate) {
-      new (self) PythonVisionIpcClient(python_string(name), stream, conflate);
-    }, nb::arg("name"), nb::arg("stream"), nb::arg("conflate"))
+    .def(nb::init<std::string, VisionStreamType, bool>(), nb::arg("name"), nb::arg("stream"), nb::arg("conflate"))
     .def_prop_ro("width", [](PythonVisionIpcClient &client) -> std::optional<size_t> {
       return client.num_buffers ? std::make_optional(client.buffers[0].width) : std::nullopt;
     })
@@ -106,9 +100,6 @@ NB_MODULE(visionipc_pyx, m) {
       return client.connect(blocking);
     }, nb::arg("blocking"), nb::call_guard<nb::gil_scoped_release>())
     .def("is_connected", [](PythonVisionIpcClient &client) { return client.is_connected(); })
-    .def_static("available_streams", [](const PythonString &name, bool block) {
-      auto text = python_string(name);
-      nb::gil_scoped_release release;
-      return VisionIpcClient::getAvailableStreams(text, block);
-    }, nb::arg("name"), nb::arg("block"));
+    .def_static("available_streams", &VisionIpcClient::getAvailableStreams, nb::arg("name"), nb::arg("block"),
+                nb::call_guard<nb::gil_scoped_release>());
 }

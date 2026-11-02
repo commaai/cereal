@@ -1,4 +1,4 @@
-from msgq.visionipc.visionipc_pyx import VisionBuf, VisionIpcClient, VisionIpcServer, get_endpoint_name
+from msgq.visionipc._visionipc import VisionBuf, VisionIpcClient, VisionIpcServer, get_endpoint_name
 
 __all__ = [
   "VisionBuf",

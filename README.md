@@ -107,8 +107,6 @@ msgq.MultiplePublishersError                     # Publisher conflict; subclass 
 
 Issues and pull requests are welcome on [GitHub](https://github.com/commaai/msgq). Run `./test.sh` to build, lint, and test the package.
 
-The Python bindings use nanobind. SCons generates type stubs from the compiled modules for type checking and includes them in the Python package.
-
 ## License
 
 MSGQ is available under the [MIT License](https://github.com/commaai/msgq/blob/master/LICENSE).

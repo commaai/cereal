@@ -32,8 +32,7 @@ msgq_objects = env.SharedObject([
   'msgq/msgq.cc',
 ])
 msgq = env.Library('msgq', msgq_objects)
-# Keep the extension module names compatible with existing Python imports.
-msgq_python = envNanobind.Program(f'msgq/ipc_pyx{python_suffix}', ['msgq/ipc_py.cc', nanobind_lib], LIBS=envNanobind["LIBS"]+[msgq]+common)
+msgq_python = envNanobind.Program(f'msgq/_ipc{python_suffix}', ['msgq/ipc_py.cc', nanobind_lib], LIBS=envNanobind["LIBS"]+[msgq]+common)
 
 # Build Vision IPC
 vipc_files = ['visionipc.cc', 'visionipc_server.cc', 'visionipc_client.cc']
@@ -48,13 +47,13 @@ visionipc = env.Library('visionipc', vipc_objects)
 
 
 vipc_libs = envNanobind["LIBS"] + [visionipc, msgq] + common
-visionipc_python = envNanobind.Program(f'{visionipc_dir.abspath}/visionipc_pyx{python_suffix}', [f'{visionipc_dir.abspath}/visionipc_py.cc', nanobind_lib],
+visionipc_python = envNanobind.Program(f'{visionipc_dir.abspath}/_visionipc{python_suffix}', [f'{visionipc_dir.abspath}/visionipc_py.cc', nanobind_lib],
                   LIBS=vipc_libs)
 
 # ASan modules require a preloaded runtime before Python can import them.
 if "-fsanitize=address" not in env["LINKFLAGS"]:
   root = Dir('.').abspath
-  for module in ('msgq.ipc_pyx', 'msgq.visionipc.visionipc_pyx'):
+  for module in ('msgq._ipc', 'msgq.visionipc._visionipc'):
     env.Command(module.replace('.', '/') + '.pyi', [msgq_python, visionipc_python],
                 f'"{sys.executable}" -m nanobind.stubgen -i "{root}" -m {module} -o "$TARGET"')
 

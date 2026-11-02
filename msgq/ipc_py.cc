@@ -10,11 +10,11 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 
 #include "msgq/event.h"
 #include "msgq/ipc.h"
-#include "msgq/python_helpers.h"
 
 namespace nb = nanobind;
 
@@ -37,16 +37,13 @@ void check_error(bool failed, int error, const std::string &endpoint = "") {
 
 }  // namespace
 
-NB_MODULE(ipc_pyx, m) {
+NB_MODULE(_ipc, m) {
   nb::exception<IpcError> ipc_error(m, "IpcError");
   nb::exception<MultiplePublishersError>(m, "MultiplePublishersError", ipc_error);
 
   m.def("toggle_fake_events", &SocketEventHandle::toggle_fake_events, nb::arg("enabled"));
-  m.def("set_fake_prefix", [](const PythonString &prefix) { SocketEventHandle::set_fake_prefix(python_string(prefix)); }, nb::arg("prefix"));
-  m.def("get_fake_prefix", [] {
-    auto prefix = SocketEventHandle::fake_prefix();
-    return nb::bytes(prefix.data(), prefix.size());
-  });
+  m.def("set_fake_prefix", &SocketEventHandle::set_fake_prefix, nb::arg("prefix"));
+  m.def("get_fake_prefix", &SocketEventHandle::fake_prefix);
   m.def("delete_fake_prefix", [] { SocketEventHandle::set_fake_prefix(""); });
   m.def("wait_for_one_event", &Event::wait_for_one, nb::arg("events"), nb::arg("timeout") = -1, nb::call_guard<nb::gil_scoped_release>());
 
@@ -60,17 +57,14 @@ NB_MODULE(ipc_pyx, m) {
     .def_prop_ro("ptr", [](Event &event) { return reinterpret_cast<uintptr_t>(&event); });
 
   nb::class_<SocketEventHandle>(m, "SocketEventHandle")
-    .def("__init__", [](SocketEventHandle *self, const PythonString &endpoint, const PythonString &identifier, bool override) {
-      new (self) SocketEventHandle(python_string(endpoint), python_string(identifier), override);
-    }, nb::arg("endpoint"), nb::arg("identifier"), nb::arg("override"))
+    .def(nb::init<std::string, std::string, bool>(), nb::arg("endpoint"), nb::arg("identifier"), nb::arg("override"))
     .def_prop_rw("enabled", &SocketEventHandle::is_enabled, &SocketEventHandle::set_enabled)
     .def_prop_ro("recv_called_event", &SocketEventHandle::recv_called, nb::keep_alive<0, 1>())
     .def_prop_ro("recv_ready_event", &SocketEventHandle::recv_ready, nb::keep_alive<0, 1>());
 
   nb::class_<SubSocket>(m, "SubSocket")
     .def(nb::init<>())
-    .def("connect", [](SubSocket &socket, const PythonString &endpoint, bool conflate, size_t segment_size) {
-      auto name = python_string(endpoint);
+    .def("connect", [](SubSocket &socket, const std::string &name, bool conflate, size_t segment_size) {
       nb::gil_scoped_release release;
       int result = socket.connect(name, conflate, segment_size);
       check_error(result != 0, errno, name);
@@ -93,8 +87,7 @@ NB_MODULE(ipc_pyx, m) {
 
   nb::class_<PubSocket>(m, "PubSocket")
     .def(nb::init<>())
-    .def("connect", [](PubSocket &socket, const PythonString &endpoint, size_t segment_size) {
-      auto name = python_string(endpoint);
+    .def("connect", [](PubSocket &socket, const std::string &name, size_t segment_size) {
       int result = socket.connect(name, segment_size);
       check_error(result != 0, errno, name);
     }, nb::arg("endpoint"), nb::arg("segment_size") = 0)
