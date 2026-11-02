@@ -21,10 +21,14 @@ dependencies = []
 Repository = "https://github.com/commaai/msgq"
 
 [project.optional-dependencies]
-dev = [
-  "setuptools",  # for distutils
+# for building from source with SCons
+build = [
   "nanobind>=2.12",
   "scons",
+]
+dev = [
+  "msgq-ipc[build]",
+  "setuptools",  # for distutils
   "ruff",
   "cppcheck",
   "cpplint",
