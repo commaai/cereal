@@ -20,3 +20,6 @@ libmessaging.*
 libmessaging_shared.*
 .sconsign.dblite
 .mypy_cache/
+
+/msgq/_ipc.pyi
+/msgq/visionipc/_visionipc.pyi

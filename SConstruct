@@ -1,7 +1,6 @@
 import os
 import platform
 import subprocess
-import sysconfig
 
 arch = subprocess.check_output(["uname", "-m"], encoding='utf8').rstrip()
 if platform.system() == "Darwin":
@@ -14,7 +13,6 @@ cpppath = [
   "#/",
   '#msgq/',
   '/usr/lib/include',
-  sysconfig.get_paths()['include'],
 ]
 
 AddOption('--minimal',
@@ -62,21 +60,9 @@ env = Environment(
   CFLAGS="-std=gnu11",
   CXXFLAGS="-std=c++1z",
   CPPPATH=cpppath,
-  CYTHONCFILESUFFIX=".cpp",
-  tools=["default", "cython"]
+  tools=["default"]
 )
 
 Export('env', 'arch', 'common')
-
-envCython = env.Clone(LIBS=[])
-envCython["CCFLAGS"] += ["-Wno-#warnings", "-Wno-cpp", "-Wno-shadow", "-Wno-deprecated-declarations"]
-envCython["CCFLAGS"].remove('-Werror')
-if arch == "Darwin":
-  envCython["LINKFLAGS"] = ["-bundle", "-undefined", "dynamic_lookup"]
-else:
-  envCython["LINKFLAGS"] = ["-pthread", "-shared"]
-
-Export('envCython')
-
 
 SConscript(['SConscript'])

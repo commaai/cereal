@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=77", "Cython>=3.1", "scons"]
+requires = ["setuptools>=77", "nanobind>=2.12", "scons"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -21,10 +21,14 @@ dependencies = []
 Repository = "https://github.com/commaai/msgq"
 
 [project.optional-dependencies]
-dev = [
-  "setuptools",  # for distutils
-  "Cython",
+# for building from source with SCons
+build = [
+  "nanobind>=2.12",
   "scons",
+]
+dev = [
+  "msgq-ipc[build]",
+  "setuptools",  # for distutils
   "ruff",
   "cppcheck",
   "cpplint",
@@ -41,12 +45,15 @@ include = ["msgq", "msgq.*"]
 namespaces = false
 
 [tool.setuptools.package-data]
-"msgq" = ["*.pxd", "*.h"]
-"msgq.visionipc" = ["*.pxd", "*.h"]
+"msgq" = ["*.pyi", "py.typed", "*.h"]
+"msgq.visionipc" = ["*.pyi", "*.h"]
 
 [tool.cibuildwheel]
 build = "cp311-* cp312-* cp313-* cp314-*"
 test-command = "python -m unittest discover -s msgq"
+
+[tool.cibuildwheel.macos.environment]
+MACOSX_DEPLOYMENT_TARGET = "10.13"
 
 # https://beta.ruff.rs/docs/configuration/#using-pyprojecttoml
 [tool.ruff]
@@ -56,10 +63,3 @@ lint.flake8-implicit-str-concat.allow-multiline=false
 
 line-length = 160
 target-version="py311"
-
-[tool.ty.src]
-exclude = ["site_scons/"]
-
-[tool.ty.rules]
-# Cython modules are compiled at build time, not available for static analysis
-unresolved-import = "ignore"

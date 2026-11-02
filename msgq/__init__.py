@@ -1,8 +1,8 @@
-from msgq.ipc_pyx import Poller, SubSocket, PubSocket, SocketEventHandle, toggle_fake_events, \
+from msgq._ipc import Poller, SubSocket, PubSocket, SocketEventHandle, toggle_fake_events, \
                                 set_fake_prefix, get_fake_prefix, delete_fake_prefix, wait_for_one_event
-from msgq.ipc_pyx import MultiplePublishersError, IpcError
+from msgq._ipc import MultiplePublishersError, IpcError
 
-from typing import Optional, List, Union
+from typing import Optional, List
 
 __all__ = [
   "Poller",
@@ -25,7 +25,7 @@ __all__ = [
 
 NO_TRAVERSAL_LIMIT = 2**64-1
 
-def fake_event_handle(endpoint: str, identifier: Optional[Union[str, bytes]] = None, override: bool = True, enable: bool = False) -> SocketEventHandle:
+def fake_event_handle(endpoint: str, identifier: Optional[str] = None, override: bool = True, enable: bool = False) -> SocketEventHandle:
   ident = identifier if identifier is not None else get_fake_prefix()
   handle = SocketEventHandle(endpoint, ident, override)
   if override:

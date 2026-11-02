@@ -18,8 +18,8 @@ lefthook run test
   trap 'rm -rf "$TEST_DIR"' EXIT
   uv venv --python "$DIR/.venv/bin/python" "$TEST_DIR/.venv"
   uv pip install --python "$TEST_DIR/.venv/bin/python" "$DIR"
-  cd "$TEST_DIR"
-  "$TEST_DIR/.venv/bin/python" -m unittest msgq.tests.test_messaging
+  cd "$("$TEST_DIR/.venv/bin/python" -c "import sysconfig; print(sysconfig.get_path('purelib'))")"
+  "$TEST_DIR/.venv/bin/python" -m unittest discover -t . -s msgq
 )
 
 # *** all done ***

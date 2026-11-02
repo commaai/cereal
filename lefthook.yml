@@ -18,12 +18,12 @@ test:
     ty:
       run: ty check .
     codespell:
-      run: codespell {files} -L ned,stdio,master --builtin clear,rare,informal,usage,code,names,en-GB_to_en-US -S uv.lock,*_pyx.cpp
+      run: codespell {files} -L ned,stdio,master --builtin clear,rare,informal,usage,code,names,en-GB_to_en-US -S uv.lock
       files: git ls-tree -r HEAD --name-only
     cppcheck:
       run: cppcheck --error-exitcode=1 --inline-suppr --language=c++ --force --quiet -j4 --check-level=exhaustive $(git ls-files '*.cc' | grep -v -E '(msgq_tests|test_runner)\.cc')
     cpplint:
-      run: cpplint --exclude=msgq/ipc_pyx.cpp --exclude=msgq/visionipc/visionipc_pyx.cpp --recursive --quiet --counting=detailed --linelength=240 --filter=-build,-legal,-readability,-runtime,-whitespace,+build/include_subdir,+build/forward_decl,+build/include_what_you_use,+build/deprecated,+whitespace/comma,+whitespace/line_length,+whitespace/empty_if_body,+whitespace/empty_loop_body,+whitespace/empty_conditional_body,+whitespace/forcolon,+whitespace/parens,+whitespace/semicolon,+whitespace/tab,+readability/braces msgq/
+      run: cpplint --recursive --quiet --counting=detailed --linelength=240 --filter=-build,-legal,-readability,-runtime,-whitespace,+build/include_subdir,+build/forward_decl,+build/include_what_you_use,+build/deprecated,+whitespace/comma,+whitespace/line_length,+whitespace/empty_if_body,+whitespace/empty_loop_body,+whitespace/empty_conditional_body,+whitespace/forcolon,+whitespace/parens,+whitespace/semicolon,+whitespace/tab,+readability/braces msgq/
 
     # *** tests ***
     test_runner:
