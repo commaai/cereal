@@ -1,3 +1,6 @@
+#include <chrono>
+#include <thread>
+
 #include "msgq/test_runner.h"
 #include "msgq/msgq.h"
 
@@ -423,4 +426,99 @@ TEST_CASE("1 publisher, 2 subscribers")
     msgq_msg_close(&msg1);
     msgq_msg_close(&msg2);
   }
+}
+
+static int64_t millis_since(std::chrono::steady_clock::time_point start)
+{
+  return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+}
+
+static std::thread send_later(msgq_queue_t *q, int delay_ms)
+{
+  return std::thread([=]() {
+    std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
+    uint64_t value = 1;
+    msgq_msg_t msg;
+    msgq_msg_init_data(&msg, (char *)&value, sizeof(value));
+    msgq_msg_send(&msg, q);
+    msgq_msg_close(&msg);
+  });
+}
+
+TEST_CASE("msgq_poll times out")
+{
+  cleanup_test_queue();
+  msgq_queue_t writer, reader;
+  msgq_new_queue(&writer, "test_queue", 1024);
+  msgq_new_queue(&reader, "test_queue", 1024);
+  msgq_init_publisher(&writer);
+  msgq_init_subscriber(&reader);
+
+  msgq_pollitem_t items[] = {{&reader, 0}};
+  auto start = std::chrono::steady_clock::now();
+  REQUIRE(msgq_poll(items, 1, 100) == 0);
+  REQUIRE(millis_since(start) >= 100);
+  REQUIRE(msgq_poll(items, 1, 0) == 0);
+
+  send_later(&writer, 0).join();
+  REQUIRE(msgq_poll(items, 1, 0) == 1);
+
+  msgq_close_queue(&writer);
+  msgq_close_queue(&reader);
+}
+
+TEST_CASE("msgq_poll wakes up on send")
+{
+  cleanup_test_queue();
+  msgq_queue_t writer, reader;
+  msgq_new_queue(&writer, "test_queue", 1024);
+  msgq_new_queue(&reader, "test_queue", 1024);
+  msgq_init_publisher(&writer);
+  msgq_init_subscriber(&reader);
+
+  msgq_pollitem_t items[] = {{&reader, 0}};
+  std::thread sender = send_later(&writer, 50);
+  auto start = std::chrono::steady_clock::now();
+  int n = msgq_poll(items, 1, 5000);
+  int64_t elapsed = millis_since(start);
+  sender.join();
+
+  REQUIRE(n == 1);
+  REQUIRE(elapsed < 1000);
+
+  msgq_close_queue(&writer);
+  msgq_close_queue(&reader);
+}
+
+TEST_CASE("msgq_poll multiple queues")
+{
+  cleanup_test_queue();
+  remove("/dev/shm/msgq_test_queue2");
+  remove("/tmp/msgq_test_queue2");
+  msgq_queue_t writer1, writer2, reader1, reader2;
+  msgq_new_queue(&writer1, "test_queue", 1024);
+  msgq_new_queue(&writer2, "test_queue2", 1024);
+  msgq_new_queue(&reader1, "test_queue", 1024);
+  msgq_new_queue(&reader2, "test_queue2", 1024);
+  msgq_init_publisher(&writer1);
+  msgq_init_publisher(&writer2);
+  msgq_init_subscriber(&reader1);
+  msgq_init_subscriber(&reader2);
+
+  msgq_pollitem_t items[] = {{&reader1, 0}, {&reader2, 0}};
+  std::thread sender = send_later(&writer2, 50);
+  auto start = std::chrono::steady_clock::now();
+  int n = msgq_poll(items, 2, 5000);
+  int64_t elapsed = millis_since(start);
+  sender.join();
+
+  REQUIRE(n == 1);
+  REQUIRE(elapsed < 1000);
+  REQUIRE(items[0].revents == 0);
+  REQUIRE(items[1].revents == 1);
+
+  msgq_close_queue(&writer1);
+  msgq_close_queue(&writer2);
+  msgq_close_queue(&reader1);
+  msgq_close_queue(&reader2);
 }
