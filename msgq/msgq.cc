@@ -76,11 +76,30 @@ static void wake_reader(int fd, uint64_t uid) {
   close(tmp);
 }
 
+// Whoever clears a reader's waiting bit has to wake it up, or it sleeps forever.
+
 // Clear the waiting bit in a reader's uid entry, waking the reader if it was set
-static void wake_if_waiting(int fd, std::atomic<uint64_t> *read_uid, uint64_t new_value) {
-  uint64_t old = read_uid->exchange(new_value);
+static void wake_if_waiting(int fd, std::atomic<uint64_t> *read_uid) {
+  uint64_t old = read_uid->fetch_and(~MSGQ_READER_WAITING);
   if (old & MSGQ_READER_WAITING) {
     wake_reader(fd, old & ~MSGQ_READER_WAITING);
+  }
+}
+
+// Replace a reader's uid entry, waking the old reader if it was waiting, so it reconnects
+static void replace_reader(int fd, std::atomic<uint64_t> *read_uid, uint64_t new_uid) {
+  uint64_t old = read_uid->exchange(new_uid);
+  if (old & MSGQ_READER_WAITING) {
+    wake_reader(fd, old & ~MSGQ_READER_WAITING);
+  }
+}
+
+// Kick out all readers
+static void evict_readers(msgq_queue_t *q, int fd) {
+  *q->num_readers = 0;
+  for (size_t i = 0; i < NUM_READERS; i++){
+    *q->read_valids[i] = false;
+    replace_reader(fd, q->read_uids[i], 0);
   }
 }
 
@@ -235,14 +254,7 @@ void msgq_init_publisher(msgq_queue_t * q) {
   if (q->send_fd < 0) q->send_fd = wake_socket();
 
   *q->write_uid = uid;
-  *q->num_readers = 0;
-
-  for (size_t i = 0; i < NUM_READERS; i++){
-    *q->read_valids[i] = false;
-
-    // Wake up readers of the old publisher, so they reconnect
-    wake_if_waiting(q->send_fd, q->read_uids[i], 0);
-  }
+  evict_readers(q, q->send_fd);
 
   q->write_uid_local = uid;
 }
@@ -262,15 +274,7 @@ void msgq_init_subscriber(msgq_queue_t * q) {
     // No more slots available. Reset all subscribers to kick out inactive ones
     if (new_num_readers > NUM_READERS){
       //std::cout << "Warning, evicting all subscribers!" << std::endl;
-      *q->num_readers = 0;
-
-      for (size_t i = 0; i < NUM_READERS; i++){
-        *q->read_valids[i] = false;
-
-        // Wake up reader in case they are in a poll
-        wake_if_waiting(-1, q->read_uids[i], 0);
-      }
-
+      evict_readers(q, -1);
       continue;
     }
 
@@ -286,8 +290,7 @@ void msgq_init_subscriber(msgq_queue_t * q) {
       // on the first read the read pointer will be synchronized with the write pointer
       *q->read_valids[cur_num_readers] = false;
       *q->read_pointers[cur_num_readers] = 0;
-      // Wake up whoever had this slot, in case it's in a poll
-      wake_if_waiting(-1, q->read_uids[cur_num_readers], uid);
+      replace_reader(-1, q->read_uids[cur_num_readers], uid);
       break;
     }
   }
@@ -376,10 +379,7 @@ int msgq_msg_send(msgq_msg_t * msg, msgq_queue_t *q){
   // subscribed and started polling during this send isn't missed.
   num_readers = *q->num_readers;
   for (uint64_t i = 0; i < num_readers; i++){
-    uint64_t uid = q->read_uids[i]->fetch_and(~MSGQ_READER_WAITING);
-    if (uid & MSGQ_READER_WAITING) {
-      wake_reader(q->send_fd, uid & ~MSGQ_READER_WAITING);
-    }
+    wake_if_waiting(q->send_fd, q->read_uids[i]);
   }
 
   return msg->size;
