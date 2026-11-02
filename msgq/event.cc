@@ -30,7 +30,7 @@ int open_event_fifo(const char* path) {
   return fd;
 }
 
-// poll() that retries on EINTR with a monotonic deadline so signal storms
+// poll() that retries on EINTR with a monotonic deadline so interruptions
 // don't extend the effective timeout.
 int poll_events(pollfd *fds, nfds_t nfds, int timeout_sec) {
   auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_sec);

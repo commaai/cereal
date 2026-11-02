@@ -20,6 +20,7 @@ struct  msgq_header_t {
   uint64_t read_pointers[NUM_READERS];
   uint64_t read_valids[NUM_READERS];
   uint64_t read_uids[NUM_READERS];
+  uint64_t read_waiting[NUM_READERS];
 };
 
 struct msgq_queue_t {
@@ -29,6 +30,7 @@ struct msgq_queue_t {
   std::atomic<uint64_t> *read_pointers[NUM_READERS];
   std::atomic<uint64_t> *read_valids[NUM_READERS];
   std::atomic<uint64_t> *read_uids[NUM_READERS];
+  std::atomic<uint64_t> *read_waiting[NUM_READERS];
   char * mmap_p;
   char * data;
   size_t size;
@@ -38,6 +40,8 @@ struct msgq_queue_t {
 
   bool read_conflate;
   std::string endpoint;
+  std::string path;
+  int wake_fd;
 };
 
 struct msgq_msg_t {

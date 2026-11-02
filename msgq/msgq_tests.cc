@@ -522,3 +522,59 @@ TEST_CASE("msgq_poll multiple queues")
   msgq_close_queue(&reader1);
   msgq_close_queue(&reader2);
 }
+
+TEST_CASE("msgq_poll from a different thread than the subscriber")
+{
+  cleanup_test_queue();
+  msgq_queue_t writer, reader;
+  msgq_new_queue(&writer, "test_queue", 1024);
+  msgq_new_queue(&reader, "test_queue", 1024);
+  msgq_init_publisher(&writer);
+  msgq_init_subscriber(&reader);
+
+  int n = -1;
+  int64_t elapsed = -1;
+  std::thread poller([&]() {
+    msgq_pollitem_t items[] = {{&reader, 0}};
+    auto start = std::chrono::steady_clock::now();
+    n = msgq_poll(items, 1, 5000);
+    elapsed = millis_since(start);
+  });
+  send_later(&writer, 50).join();
+  poller.join();
+
+  REQUIRE(n == 1);
+  REQUIRE(elapsed < 1000);
+
+  msgq_close_queue(&writer);
+  msgq_close_queue(&reader);
+}
+
+TEST_CASE("msgq_poll reconnects to a new publisher")
+{
+  cleanup_test_queue();
+  msgq_queue_t writer, reader;
+  msgq_new_queue(&writer, "test_queue", 1024);
+  msgq_new_queue(&reader, "test_queue", 1024);
+  msgq_init_publisher(&writer);
+  msgq_init_subscriber(&reader);
+
+  // A new publisher evicts the blocked reader, which has to reconnect to see the next message
+  std::thread restart([&]() {
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    msgq_init_publisher(&writer);
+    send_later(&writer, 50).join();
+  });
+
+  msgq_pollitem_t items[] = {{&reader, 0}};
+  auto start = std::chrono::steady_clock::now();
+  int n = msgq_poll(items, 1, 5000);
+  int64_t elapsed = millis_since(start);
+  restart.join();
+
+  REQUIRE(n == 1);
+  REQUIRE(elapsed < 1000);
+
+  msgq_close_queue(&writer);
+  msgq_close_queue(&reader);
+}
