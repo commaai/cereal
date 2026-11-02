@@ -591,7 +591,7 @@ TEST_CASE("msgq_poll wakes up despite a stuck reader")
   msgq_init_subscriber(&reader);
 
   // A reader that went to sleep in a poll, but never wakes up to read its socket
-  *stuck.read_waiting[stuck.reader_id] = true;
+  *stuck.read_uids[stuck.reader_id] |= MSGQ_READER_WAITING;
   for (int i = 0; i < 1000; i++) {
     send_later(&writer, 0).join();
   }
@@ -612,4 +612,48 @@ TEST_CASE("msgq_poll wakes up despite a stuck reader")
   msgq_close_queue(&writer);
   msgq_close_queue(&stuck);
   msgq_close_queue(&reader);
+}
+
+TEST_CASE("msgq_poll keeps waking readers through publisher restarts")
+{
+  cleanup_test_queue();
+  msgq_queue_t writer;
+  msgq_new_queue(&writer, "test_queue", 1 << 16);
+  msgq_init_publisher(&writer);
+
+  const int num_readers = 10;
+  std::atomic<bool> done = false;
+  std::atomic<int> timeouts = 0;
+  std::vector<std::thread> readers;
+  for (int i = 0; i < num_readers; i++) {
+    readers.emplace_back([&]() {
+      msgq_queue_t reader;
+      msgq_new_queue(&reader, "test_queue", 1 << 16);
+      msgq_init_subscriber(&reader);
+      msgq_pollitem_t items[] = {{&reader, 0}};
+      while (!done) {
+        if (msgq_poll(items, 1, 1000) == 0 && !done) timeouts++;
+        msgq_msg_t msg;
+        while (msgq_msg_recv(&msg, &reader) > 0) msgq_msg_close(&msg);
+      }
+      msgq_close_queue(&reader);
+    });
+  }
+
+  // Messages flow every 1ms, so no poll should ever reach its timeout
+  auto start = std::chrono::steady_clock::now();
+  for (int i = 0; millis_since(start) < 3000; i++) {
+    if (i % 20 == 0) msgq_init_publisher(&writer);
+    send_later(&writer, 0).join();
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  done = true;
+  for (int i = 0; i < 100; i++) {
+    send_later(&writer, 0).join();
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  for (auto &t : readers) t.join();
+
+  REQUIRE(timeouts == 0);
+  msgq_close_queue(&writer);
 }

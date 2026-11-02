@@ -3,6 +3,7 @@
 #include <cerrno>
 #include <cmath>
 #include <cstring>
+#include <cstddef>
 #include <cstdint>
 #include <chrono>
 #include <algorithm>
@@ -28,20 +29,23 @@
 
 uint64_t msgq_get_uid(void){
   std::random_device rd("/dev/urandom");
-  std::uniform_int_distribution<uint64_t> distribution(1, std::numeric_limits<uint64_t>::max());
+  std::uniform_int_distribution<uint64_t> distribution(1, MSGQ_READER_WAITING - 1);
   return distribution(rd);
 }
 
-// Readers blocked in msgq_poll wait on a unix datagram socket bound to a per-slot path.
-// Writers wake them by sending an empty datagram to that path.
-static bool wake_addr(const msgq_queue_t *q, int reader_id, sockaddr_un *addr) {
-  std::string path = q->path + ".wake" + std::to_string(reader_id);
-  if (path.size() >= sizeof(addr->sun_path)) return false;
-
+// Readers blocked in msgq_poll wait on a unix datagram socket named after their uid.
+// Writers wake them by sending an empty datagram to it.
+static socklen_t wake_addr(uint64_t uid, sockaddr_un *addr) {
   memset(addr, 0, sizeof(*addr));
   addr->sun_family = AF_UNIX;
-  memcpy(addr->sun_path, path.c_str(), path.size() + 1);
-  return true;
+#ifdef __APPLE__
+  snprintf(addr->sun_path, sizeof(addr->sun_path), "/tmp/msgq_wake_%016llx", (unsigned long long)uid);
+  return sizeof(*addr);
+#else
+  // Abstract namespace: no file to clean up, and the name is released when the socket closes
+  int n = snprintf(addr->sun_path + 1, sizeof(addr->sun_path) - 1, "msgq_wake_%016llx", (unsigned long long)uid);
+  return offsetof(sockaddr_un, sun_path) + 1 + n;
+#endif
 }
 
 static int wake_socket() {
@@ -53,14 +57,14 @@ static int wake_socket() {
   return fd;
 }
 
-static void wake_reader(const msgq_queue_t *q, int reader_id) {
+static void wake_reader(uint64_t uid) {
   static int fd = wake_socket();
   sockaddr_un addr;
-  if (fd < 0 || !wake_addr(q, reader_id, &addr)) return;
+  socklen_t len = wake_addr(uid, &addr);
 
   char c = 0;
-  if (sendto(fd, &c, sizeof(c), 0, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) >= 0 ||
-      errno == ENOENT || errno == ECONNREFUSED) {
+  if (fd >= 0 && (sendto(fd, &c, sizeof(c), 0, reinterpret_cast<sockaddr*>(&addr), len) >= 0 ||
+                  errno == ENOENT || errno == ECONNREFUSED)) {
     return;  // sent, or nobody is listening
   }
 
@@ -69,22 +73,36 @@ static void wake_reader(const msgq_queue_t *q, int reader_id) {
   // reader's queue is full and a wakeup is already pending.
   int tmp = socket(AF_UNIX, SOCK_DGRAM, 0);
   if (tmp < 0) return;
-  sendto(tmp, &c, sizeof(c), MSG_DONTWAIT, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
+  sendto(tmp, &c, sizeof(c), MSG_DONTWAIT, reinterpret_cast<sockaddr*>(&addr), len);
   close(tmp);
 }
 
-static void bind_wake_socket(msgq_queue_t *q) {
-  if (q->wake_fd >= 0) close(q->wake_fd);
-  q->wake_fd = -1;
+// Clear the waiting bit in a reader's uid entry, waking the reader if it was set
+static void wake_if_waiting(std::atomic<uint64_t> *read_uid, uint64_t new_value) {
+  uint64_t old = read_uid->exchange(new_value);
+  if (old & MSGQ_READER_WAITING) {
+    wake_reader(old & ~MSGQ_READER_WAITING);
+  }
+}
 
+static void close_wake_socket(msgq_queue_t *q) {
+  if (q->wake_fd < 0) return;
+  close(q->wake_fd);
+  q->wake_fd = -1;
+#ifdef __APPLE__
   sockaddr_un addr;
-  if (!wake_addr(q, q->reader_id, &addr)) return;
+  wake_addr(q->read_uid_local, &addr);
+  unlink(addr.sun_path);
+#endif
+}
+
+static void bind_wake_socket(msgq_queue_t *q) {
+  sockaddr_un addr;
+  socklen_t len = wake_addr(q->read_uid_local, &addr);
 
   int fd = wake_socket();
   if (fd < 0) return;
-
-  unlink(addr.sun_path);  // left behind by a previous reader in this slot
-  if (bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
+  if (bind(fd, reinterpret_cast<sockaddr*>(&addr), len) < 0) {
     close(fd);
     return;
   }
@@ -187,7 +205,6 @@ int msgq_new_queue(msgq_queue_t * q, const char * path, size_t size){
     q->read_pointers[i] = reinterpret_cast<std::atomic<uint64_t>*>(&header->read_pointers[i]);
     q->read_valids[i] = reinterpret_cast<std::atomic<uint64_t>*>(&header->read_valids[i]);
     q->read_uids[i] = reinterpret_cast<std::atomic<uint64_t>*>(&header->read_uids[i]);
-    q->read_waiting[i] = reinterpret_cast<std::atomic<uint64_t>*>(&header->read_waiting[i]);
   }
 
   q->data = mem + sizeof(msgq_header_t);
@@ -195,9 +212,7 @@ int msgq_new_queue(msgq_queue_t * q, const char * path, size_t size){
   q->reader_id = -1;
 
   q->endpoint = path;
-  q->path = full_path;
   q->read_conflate = false;
-  q->wake_fd = -1;
 
   return 0;
 }
@@ -206,10 +221,7 @@ void msgq_close_queue(msgq_queue_t *q){
   if (q->mmap_p != NULL){
     munmap(q->mmap_p, q->size + sizeof(msgq_header_t));
   }
-  if (q->wake_fd >= 0) {
-    close(q->wake_fd);
-    q->wake_fd = -1;
-  }
+  close_wake_socket(q);
 }
 
 
@@ -222,10 +234,9 @@ void msgq_init_publisher(msgq_queue_t * q) {
 
   for (size_t i = 0; i < NUM_READERS; i++){
     *q->read_valids[i] = false;
-    *q->read_uids[i] = 0;
 
     // Wake up readers of the old publisher, so they reconnect
-    wake_reader(q, i);
+    wake_if_waiting(q->read_uids[i], 0);
   }
 
   q->write_uid_local = uid;
@@ -235,6 +246,7 @@ void msgq_init_subscriber(msgq_queue_t * q) {
   assert(q != NULL);
   assert(q->num_readers != NULL);
 
+  close_wake_socket(q);
   uint64_t uid = msgq_get_uid();
 
   // Get reader id
@@ -249,10 +261,9 @@ void msgq_init_subscriber(msgq_queue_t * q) {
 
       for (size_t i = 0; i < NUM_READERS; i++){
         *q->read_valids[i] = false;
-        *q->read_uids[i] = 0;
 
         // Wake up reader in case they are in a poll
-        wake_reader(q, i);
+        wake_if_waiting(q->read_uids[i], 0);
       }
 
       continue;
@@ -270,8 +281,8 @@ void msgq_init_subscriber(msgq_queue_t * q) {
       // on the first read the read pointer will be synchronized with the write pointer
       *q->read_valids[cur_num_readers] = false;
       *q->read_pointers[cur_num_readers] = 0;
-      *q->read_uids[cur_num_readers] = uid;
-      *q->read_waiting[cur_num_readers] = false;
+      // Wake up whoever had this slot, in case it's in a poll
+      wake_if_waiting(q->read_uids[cur_num_readers], uid);
       break;
     }
   }
@@ -360,8 +371,9 @@ int msgq_msg_send(msgq_msg_t * msg, msgq_queue_t *q){
   // subscribed and started polling during this send isn't missed.
   num_readers = *q->num_readers;
   for (uint64_t i = 0; i < num_readers; i++){
-    if (q->read_waiting[i]->exchange(false)) {
-      wake_reader(q, i);
+    uint64_t uid = q->read_uids[i]->fetch_and(~MSGQ_READER_WAITING);
+    if (uid & MSGQ_READER_WAITING) {
+      wake_reader(uid & ~MSGQ_READER_WAITING);
     }
   }
 
@@ -374,7 +386,7 @@ int msgq_msg_ready(msgq_queue_t * q){
   int id = q->reader_id;
   assert(id >= 0); // Make sure subscriber is initialized
 
-  if (q->read_uid_local != *q->read_uids[id]){
+  if (q->read_uid_local != (*q->read_uids[id] & ~MSGQ_READER_WAITING)){
     //std::cout << q->endpoint << ": Reader was evicted, reconnecting" << std::endl;
     msgq_init_subscriber(q);
     goto start;
@@ -403,7 +415,7 @@ int msgq_msg_recv(msgq_msg_t * msg, msgq_queue_t * q){
   int id = q->reader_id;
   assert(id >= 0); // Make sure subscriber is initialized
 
-  if (q->read_uid_local != *q->read_uids[id]){
+  if (q->read_uid_local != (*q->read_uids[id] & ~MSGQ_READER_WAITING)){
     //std::cout << q->endpoint << ": Reader was evicted, reconnecting" << std::endl;
     msgq_init_subscriber(q);
     goto start;
@@ -490,6 +502,8 @@ int msgq_msg_recv(msgq_msg_t * msg, msgq_queue_t * q){
 int msgq_poll(msgq_pollitem_t * items, size_t nitems, int timeout){
   auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout);
   std::vector<pollfd> fds(nitems);
+  std::vector<std::atomic<uint64_t>*> armed(nitems);
+  std::vector<uint64_t> uids(nitems);
 
   while (true) {
     int num = 0;
@@ -510,14 +524,17 @@ int msgq_poll(msgq_pollitem_t * items, size_t nitems, int timeout){
     bool can_block = true;
     for (size_t i = 0; i < nitems; i++) {
       msgq_queue_t *q = items[i].q;
-      uint64_t uid = q->read_uid_local;
+      uids[i] = q->read_uid_local;
 
-      // Ask for a wakeup before checking again, so a message sent in between isn't missed
-      *q->read_waiting[q->reader_id] = true;
+      // Ask for a wakeup before checking again, so a message sent in between isn't missed.
+      // This only succeeds while we still own the slot. If we were evicted, the check reconnects.
+      armed[i] = q->read_uids[q->reader_id];
+      uint64_t expected = uids[i];
+      armed[i]->compare_exchange_strong(expected, uids[i] | MSGQ_READER_WAITING);
       num += msgq_msg_ready(q);
 
       // The reader may have moved to a new slot that isn't armed yet
-      reconnected |= (q->read_uid_local != uid);
+      reconnected |= (q->read_uid_local != uids[i]);
       can_block &= (q->wake_fd >= 0);
       fds[i] = {q->wake_fd, POLLIN, 0};
     }
@@ -529,8 +546,9 @@ int msgq_poll(msgq_pollitem_t * items, size_t nitems, int timeout){
     }
 
     for (size_t i = 0; i < nitems; i++) {
-      msgq_queue_t *q = items[i].q;
-      *q->read_waiting[q->reader_id] = false;
+      // Only clears our own request; the slot may belong to someone else by now
+      uint64_t expected = uids[i] | MSGQ_READER_WAITING;
+      armed[i]->compare_exchange_strong(expected, uids[i]);
       if (fds[i].revents & POLLIN) {
         drain_wake_socket(fds[i].fd);
       }

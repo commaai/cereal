@@ -10,6 +10,9 @@
 #define ALIGN(n) ((n + (8 - 1)) & -8)
 
 #define UNUSED(x) (void)x
+
+// Set in a reader's read_uids entry while it sleeps in msgq_poll
+#define MSGQ_READER_WAITING (1ULL << 63)
 #define UNPACK64(higher, lower, input) do {uint64_t tmp = input; higher = tmp >> 32; lower = tmp & 0xFFFFFFFF;} while (0)
 #define PACK64(output, higher, lower) output = ((uint64_t)higher << 32) | ((uint64_t)lower & 0xFFFFFFFF)
 
@@ -20,7 +23,6 @@ struct  msgq_header_t {
   uint64_t read_pointers[NUM_READERS];
   uint64_t read_valids[NUM_READERS];
   uint64_t read_uids[NUM_READERS];
-  uint64_t read_waiting[NUM_READERS];
 };
 
 struct msgq_queue_t {
@@ -30,8 +32,7 @@ struct msgq_queue_t {
   std::atomic<uint64_t> *read_pointers[NUM_READERS];
   std::atomic<uint64_t> *read_valids[NUM_READERS];
   std::atomic<uint64_t> *read_uids[NUM_READERS];
-  std::atomic<uint64_t> *read_waiting[NUM_READERS];
-  char * mmap_p;
+  char * mmap_p = nullptr;
   char * data;
   size_t size;
   int reader_id;
@@ -40,8 +41,7 @@ struct msgq_queue_t {
 
   bool read_conflate;
   std::string endpoint;
-  std::string path;
-  int wake_fd;
+  int wake_fd = -1;
 };
 
 struct msgq_msg_t {
