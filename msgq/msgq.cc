@@ -391,7 +391,9 @@ int msgq_msg_ready(msgq_queue_t * q){
   int id = q->reader_id;
   assert(id >= 0); // Make sure subscriber is initialized
 
-  if (q->read_uid_local != (*q->read_uids[id] & ~MSGQ_READER_WAITING)){
+  // Also reconnect if num_readers was reset after we claimed our slot, since
+  // publishers only look at slots below num_readers
+  if (q->read_uid_local != (*q->read_uids[id] & ~MSGQ_READER_WAITING) || (uint64_t)id >= *q->num_readers){
     //std::cout << q->endpoint << ": Reader was evicted, reconnecting" << std::endl;
     msgq_init_subscriber(q);
     goto start;
@@ -420,7 +422,9 @@ int msgq_msg_recv(msgq_msg_t * msg, msgq_queue_t * q){
   int id = q->reader_id;
   assert(id >= 0); // Make sure subscriber is initialized
 
-  if (q->read_uid_local != (*q->read_uids[id] & ~MSGQ_READER_WAITING)){
+  // Also reconnect if num_readers was reset after we claimed our slot, since
+  // publishers only look at slots below num_readers
+  if (q->read_uid_local != (*q->read_uids[id] & ~MSGQ_READER_WAITING) || (uint64_t)id >= *q->num_readers){
     //std::cout << q->endpoint << ": Reader was evicted, reconnecting" << std::endl;
     msgq_init_subscriber(q);
     goto start;
