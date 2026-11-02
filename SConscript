@@ -1,7 +1,25 @@
 import sys
 import sysconfig
+from pathlib import Path
 
-Import('env', 'envNanobind', 'nanobind_lib', 'common')
+import nanobind
+
+Import('env', 'arch', 'common')
+
+envNanobind = env.Clone(LIBS=[])
+nb_dir = Path(nanobind.source_dir()).parent
+envNanobind.Append(CPPPATH=[sysconfig.get_paths()['include'], nanobind.include_dir(), str(nb_dir / "ext/robin_map/include")],
+                   CCFLAGS=["-fvisibility=hidden", "-fno-strict-aliasing"])
+if arch == "Darwin":
+  envNanobind.Append(LINKFLAGS=["-bundle", "-undefined", "dynamic_lookup"])
+else:
+  # Python symbols resolve at import time.
+  envNanobind["LINKFLAGS"] = [f for f in env["LINKFLAGS"] if f != "-Wl,--no-undefined"] + ["-pthread", "-shared"]
+
+# Third-party runtime sources do not follow our shadowing warning policy.
+envNanobindRuntime = envNanobind.Clone()
+envNanobindRuntime['CCFLAGS'] = [flag for flag in envNanobindRuntime['CCFLAGS'] if not flag.startswith('-Wshadow')]
+nanobind_lib = envNanobindRuntime.SharedObject('msgq/nb_combined.os', str(nb_dir / "src/nb_combined.cpp"))
 
 
 visionipc_dir = Dir('msgq/visionipc')
@@ -34,10 +52,11 @@ visionipc_python = envNanobind.Program(f'{visionipc_dir.abspath}/visionipc_pyx{p
                   LIBS=vipc_libs)
 
 # ASan modules require a preloaded runtime before Python can import them.
-if not GetOption('asan'):
+if "-fsanitize=address" not in env["LINKFLAGS"]:
+  root = Dir('.').abspath
   for module in ('msgq.ipc_pyx', 'msgq.visionipc.visionipc_pyx'):
     env.Command(module.replace('.', '/') + '.pyi', [msgq_python, visionipc_python],
-                f'"{sys.executable}" -m nanobind.stubgen -i "{Dir("#").abspath}" -m {module} -o "$TARGET"')
+                f'"{sys.executable}" -m nanobind.stubgen -i "{root}" -m {module} -o "$TARGET"')
 
 if GetOption('extras'):
   env.Program('msgq/test_runner', ['msgq/msgq_tests.cc'], LIBS=[msgq]+common)

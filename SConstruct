@@ -1,10 +1,6 @@
 import os
 import platform
-from pathlib import Path
 import subprocess
-import sysconfig
-
-import nanobind
 
 arch = subprocess.check_output(["uname", "-m"], encoding='utf8').rstrip()
 if platform.system() == "Darwin":
@@ -17,7 +13,6 @@ cpppath = [
   "#/",
   '#msgq/',
   '/usr/lib/include',
-  sysconfig.get_paths()['include'],
 ]
 
 AddOption('--minimal',
@@ -69,20 +64,5 @@ env = Environment(
 )
 
 Export('env', 'arch', 'common')
-
-envNanobind = env.Clone(LIBS=[])
-nb_dir = Path(nanobind.source_dir()).parent
-envNanobind.Append(CPPPATH=[nanobind.include_dir(), str(nb_dir / "ext/robin_map/include")],
-                   CCFLAGS=["-fvisibility=hidden", "-fno-strict-aliasing"])
-if arch == "Darwin":
-  envNanobind["LINKFLAGS"] = ldflags + ["-bundle", "-undefined", "dynamic_lookup"]
-else:
-  envNanobind["LINKFLAGS"] = ldflags + ["-pthread", "-shared"]
-
-# Third-party runtime sources do not follow our shadowing warning policy.
-envNanobindRuntime = envNanobind.Clone()
-envNanobindRuntime['CCFLAGS'] = [flag for flag in envNanobindRuntime['CCFLAGS'] if not flag.startswith('-Wshadow')]
-nanobind_lib = envNanobindRuntime.SharedObject('#/build/nb_combined.os', str(nb_dir / "src/nb_combined.cpp"))
-Export('envNanobind', 'nanobind_lib')
 
 SConscript(['SConscript'])
