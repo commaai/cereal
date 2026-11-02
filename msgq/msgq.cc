@@ -8,7 +8,6 @@
 #include <chrono>
 #include <algorithm>
 #include <cstdlib>
-#include <random>
 #include <string>
 #include <limits>
 #include <vector>
@@ -16,6 +15,7 @@
 #include <poll.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/random.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -28,9 +28,12 @@
 #include "msgq/msgq.h"
 
 uint64_t msgq_get_uid(void){
-  std::random_device rd("/dev/urandom");
-  std::uniform_int_distribution<uint64_t> distribution(1, std::numeric_limits<uint64_t>::max());
-  return distribution(rd);
+  // getentropy doesn't need a file descriptor, so this works even when the process is out of them
+  uint64_t uid = 0;
+  while (uid == 0) {
+    if (getentropy(&uid, sizeof(uid)) != 0) abort();
+  }
+  return uid;
 }
 
 // A thread blocked in msgq_poll waits on a unix datagram socket named after a random uid,
@@ -100,10 +103,10 @@ struct WakeSocket {
   ~WakeSocket() { close_fd(pid == getpid()); }
 };
 
-// The calling thread's wake socket, or -1 if it couldn't be created
+// The calling thread's wake socket, with fd -1 if it couldn't be created
 static WakeSocket &thread_wake_socket() {
   thread_local WakeSocket w;
-  if (w.pid != getpid()) {
+  if (w.fd < 0 || w.pid != getpid()) {
     // New thread, or forked from the thread that made it. Leave the parent's socket alone.
     w.close_fd(false);
     w.pid = getpid();
@@ -534,8 +537,7 @@ int msgq_msg_recv(msgq_msg_t * msg, msgq_queue_t * q){
 
 int msgq_poll(msgq_pollitem_t * items, size_t nitems, int timeout){
   auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout);
-  WakeSocket &w = thread_wake_socket();
-  std::vector<int> slots(nitems);
+  std::vector<int> slots;
 
   while (true) {
     int num = 0;
@@ -553,6 +555,8 @@ int msgq_poll(msgq_pollitem_t * items, size_t nitems, int timeout){
     }
 
     // Ask for a wakeup before checking again, so a message sent in between isn't missed
+    WakeSocket &w = thread_wake_socket();
+    slots.resize(nitems);
     bool can_block = (w.fd >= 0);
     for (size_t i = 0; i < nitems; i++) {
       slots[i] = add_waiter(items[i].q, w.uid);
