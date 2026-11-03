@@ -1,3 +1,7 @@
+#include "msgq/visionipc/visionbuf_backend.h"
+
+#ifdef __linux__
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -9,11 +13,10 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
-#include <linux/ion.h>
 
-#include <linux/msm_ion.h>
+#include "msgq/visionipc/ion_uapi.h"
 
-#include "msgq/visionipc/visionbuf.h"
+namespace {
 
 // keep trying if x gets interrupted by a signal
 #define HANDLE_EINTR(x)                                       \
@@ -42,7 +45,7 @@ int ion_fd() {
   return fh.fd;
 }
 
-void VisionBuf::allocate(size_t length) {
+void allocate(VisionBuf *buf, size_t length) {
   struct ion_allocation_data ion_alloc = {0};
   ion_alloc.len = length + sizeof(uint64_t);
   ion_alloc.align = 4096;
@@ -64,47 +67,37 @@ void VisionBuf::allocate(size_t length) {
 
   memset(mmap_addr, 0, ion_alloc.len);
 
-  this->len = length;
-  this->mmap_len = ion_alloc.len;
-  this->addr = mmap_addr;
-  this->handle = ion_alloc.handle;
-  this->fd = ion_fd_data.fd;
-  this->frame_id = (uint64_t*)((uint8_t*)this->addr + this->len);
+  buf->len = length;
+  buf->mmap_len = ion_alloc.len;
+  buf->addr = mmap_addr;
+  buf->handle = ion_alloc.handle;
+  buf->fd = ion_fd_data.fd;
+  buf->frame_id = (uint64_t*)((uint8_t*)buf->addr + buf->len);
 }
 
-void VisionBuf::import(){
+void import(VisionBuf *buf) {
   int err;
-  assert(this->fd >= 0);
+  assert(buf->fd >= 0);
 
   // Get handle
   struct ion_fd_data fd_data = {0};
-  fd_data.fd = this->fd;
+  fd_data.fd = buf->fd;
   err = HANDLE_EINTR(ioctl(ion_fd(), ION_IOC_IMPORT, &fd_data));
   assert(err == 0);
 
-  this->handle = fd_data.handle;
-  this->addr = mmap(NULL, this->mmap_len, PROT_READ | PROT_WRITE, MAP_SHARED, this->fd, 0);
-  assert(this->addr != MAP_FAILED);
+  buf->handle = fd_data.handle;
+  buf->addr = mmap(NULL, buf->mmap_len, PROT_READ | PROT_WRITE, MAP_SHARED, buf->fd, 0);
+  assert(buf->addr != MAP_FAILED);
 
-  this->frame_id = (uint64_t*)((uint8_t*)this->addr + this->len);
+  buf->frame_id = (uint64_t*)((uint8_t*)buf->addr + buf->len);
 }
 
-void VisionBuf::init_yuv(size_t init_width, size_t init_height, size_t init_stride, size_t init_uv_offset){
-  this->width = init_width;
-  this->height = init_height;
-  this->stride = init_stride;
-  this->uv_offset = init_uv_offset;
-
-  this->y = (uint8_t *)this->addr;
-  this->uv = this->y + this->uv_offset;
-}
-
-int VisionBuf::sync(int dir) {
+int sync(VisionBuf *buf, int dir) {
   struct ion_flush_data flush_data = {0};
-  flush_data.handle = this->handle;
-  flush_data.vaddr = this->addr;
+  flush_data.handle = buf->handle;
+  flush_data.vaddr = buf->addr;
   flush_data.offset = 0;
-  flush_data.length = this->len;
+  flush_data.length = buf->len;
 
   // ION_IOC_INV_CACHES ~= DMA_FROM_DEVICE
   // ION_IOC_CLEAN_CACHES ~= DMA_TO_DEVICE
@@ -120,21 +113,48 @@ int VisionBuf::sync(int dir) {
   return HANDLE_EINTR(ioctl(ion_fd(), ION_IOC_CUSTOM, &custom_data));
 }
 
-int VisionBuf::free() {
-  int err = munmap(this->addr, this->mmap_len);
+int free(VisionBuf *buf) {
+  int err = munmap(buf->addr, buf->mmap_len);
   if (err != 0) return err;
 
-  err = close(this->fd);
+  err = close(buf->fd);
   if (err != 0) return err;
 
-  struct ion_handle_data handle_data = {.handle = this->handle};
+  struct ion_handle_data handle_data = {.handle = buf->handle};
   return HANDLE_EINTR(ioctl(ion_fd(), ION_IOC_FREE, &handle_data));
 }
 
-uint64_t VisionBuf::get_frame_id() {
-  return *frame_id;
+// the producer invalidates the CPU caches when it sends a frame the hardware wrote (VisionIpcServer::send with sync),
+// so reads need nothing more. writes are cleaned when they're done
+int begin_cpu_access(VisionBuf *buf, bool write) {
+  return 0;
 }
 
-void VisionBuf::set_frame_id(uint64_t id) {
-  *frame_id = id;
+int end_cpu_access(VisionBuf *buf, bool write) {
+  return write ? sync(buf, VISIONBUF_SYNC_TO_DEVICE) : 0;
 }
+
+int begin_cpu_read(VisionBuf *buf, size_t start, size_t length) {
+  return begin_cpu_access(buf, false);
+}
+
+const VisionBufBackend backend = {
+  .name = "ion",
+  .allocate = allocate,
+  .import = import,
+  .sync = sync,
+  .begin_cpu_access = begin_cpu_access,
+  .end_cpu_access = end_cpu_access,
+  .begin_cpu_read = begin_cpu_read,
+  .free = free,
+};
+
+}  // namespace
+
+const VisionBufBackend *visionbuf_ion_backend() { return &backend; }
+
+#else
+
+const VisionBufBackend *visionbuf_ion_backend() { return nullptr; }
+
+#endif

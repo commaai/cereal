@@ -2,7 +2,7 @@ import gc
 import struct
 import unittest
 from typing import Optional
-from msgq.visionipc import VisionIpcServer, VisionIpcClient
+from msgq.visionipc import VisionIpcServer, VisionIpcClient, visionbuf_backend_name
 
 
 class TestVisionIpc(unittest.TestCase):
@@ -109,9 +109,23 @@ class TestVisionIpc(unittest.TestCase):
         self.assertEqual(client.timestamp_eof, 456)
         self.assertFalse(client.valid)
 
+  def test_cpu_access(self):
+    assert visionbuf_backend_name() in ("dma_heap", "ion", "shm")
+    server, client, buffer_len = self.setup_vipc("camerad", 0)
+    server.send(0, b"a" * buffer_len, frame_id=1)
+    buf = client.recv()
+    assert buf is not None
+    buf.begin_cpu_read(0, 16)
+    self.assertEqual(bytes(buf.data[:16]), b"a" * 16)
+    buf.end_cpu_access()
+    buf.begin_cpu_access(write=True)
+    buf.data[0] = ord("b")
+    buf.end_cpu_access(write=True)
+    assert buf.server_id != 0
+
   def test_send_wrong_size(self):
     server, _, _ = self.setup_vipc("camerad", 0)
-    with self.assertRaises(AssertionError):
+    with self.assertRaises(ValueError):
       server.send(0, b"short")
 
   def test_buffer_keeps_client_alive(self):

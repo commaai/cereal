@@ -34,6 +34,7 @@ class VisionIpcServer {
 
   void create_buffers(VisionStreamType type, size_t num_buffers, size_t width, size_t height);
   void create_buffers_with_sizes(VisionStreamType type, size_t num_buffers, size_t width, size_t height, size_t size, size_t stride, size_t uv_offset);
+  // sync: invalidate the frame the hardware wrote, ION only (see VisionBuf::sync)
   void send(VisionBuf * buf, VisionIpcBufExtra * extra, bool sync=true);
   void start_listener();
 };

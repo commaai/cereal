@@ -107,6 +107,16 @@ msgq.MultiplePublishersError                     # Publisher conflict; subclass 
 
 Issues and pull requests are welcome on [GitHub](https://github.com/commaai/msgq). Run `./test.sh` to build, lint, and test the package.
 
+VisionIPC picks its buffer backend at runtime: DMA-BUF heaps on comma devices
+(AGNOS) with the upstream kernel, ION with the downstream 4.9 kernel, and shared
+memory everywhere else. Every Linux build has all three, so one build runs on
+either kernel. Bracket every CPU access to a buffer that hardware also uses with
+`begin_cpu_access(write)` and `end_cpu_access(write)`, or
+`begin_cpu_read(start, length)` for a read of part of it; device completion
+must be handled by the caller. Reads skip the end sync, which only cleans on
+arm64, and the frame id after the buffer (`set_frame_id`) is the writer's own:
+it isn't synced, and the hardware never writes it.
+
 ## License
 
 MSGQ is available under the [MIT License](https://github.com/commaai/msgq/blob/master/LICENSE).
