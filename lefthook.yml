@@ -28,5 +28,7 @@ test:
     # *** tests ***
     test_runner:
       run: msgq/test_runner
+    visionbuf_test_runner:
+      run: msgq/visionipc/test_runner
     unittest:
       run: python -m unittest discover -t . -s msgq

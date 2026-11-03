@@ -26,6 +26,13 @@ struct PythonVisionIpcClient : VisionIpcClient {
 using Buffer = nb::ndarray<nb::memview, uint8_t, nb::ndim<1>, nb::device::cpu>;
 using InputBuffer = nb::ndarray<const uint8_t, nb::ndim<1>, nb::device::cpu>;
 
+void check_cpu_access(int ret, const char *msg) {
+  if (ret != 0) {
+    PyErr_SetString(PyExc_OSError, msg);
+    throw nb::python_error();
+  }
+}
+
 }  // namespace
 
 NB_MODULE(_visionipc, m) {
@@ -33,6 +40,8 @@ NB_MODULE(_visionipc, m) {
   nb::set_leak_warnings(false);
 
   m.def("get_endpoint_name", &get_endpoint_name, nb::arg("name"), nb::arg("stream"));
+  // the buffer backend this process uses: "dma_heap", "ion" or "shm", see visionbuf_backend_name()
+  m.def("visionbuf_backend_name", []() { return std::string(visionbuf_backend_name()); });
 
   nb::class_<VisionBuf>(m, "VisionBuf")
     .def_prop_ro("data", [](VisionBuf &buf) { return Buffer(buf.addr, {buf.len}); }, nb::rv_policy::reference_internal,
@@ -43,7 +52,21 @@ NB_MODULE(_visionipc, m) {
     .def_ro("uv_offset", &VisionBuf::uv_offset)
     .def_ro("idx", &VisionBuf::idx)
     .def_ro("fd", &VisionBuf::fd)
-    .def_prop_ro("frame_id", &VisionBuf::get_frame_id);
+    // the id of the server instance that made the buffer, a new one each time the server starts
+    .def_ro("server_id", &VisionBuf::server_id)
+    .def_prop_ro("frame_id", &VisionBuf::get_frame_id)
+    // call before the CPU accesses the buffer, see VisionBuf::begin_cpu_access
+    .def("begin_cpu_access", [](VisionBuf &buf, bool write) {
+      check_cpu_access(buf.begin_cpu_access(write), "VisionBuf begin_cpu_access failed");
+    }, nb::arg("write") = false)
+    // begin_cpu_access(False) for a read of only [start, start + length), see VisionBuf::begin_cpu_read
+    .def("begin_cpu_read", [](VisionBuf &buf, size_t start, size_t length) {
+      check_cpu_access(buf.begin_cpu_read(start, length), "VisionBuf begin_cpu_read failed");
+    }, nb::arg("start"), nb::arg("length"))
+    // call after the CPU accessed the buffer
+    .def("end_cpu_access", [](VisionBuf &buf, bool write) {
+      check_cpu_access(buf.end_cpu_access(write), "VisionBuf end_cpu_access failed");
+    }, nb::arg("write") = false);
 
   nb::class_<VisionIpcServer>(m, "VisionIpcServer")
     .def(nb::init<std::string>(), nb::arg("name"))
@@ -54,9 +77,10 @@ NB_MODULE(_visionipc, m) {
                     uint32_t frame_id, uint64_t timestamp_sof, uint64_t timestamp_eof) {
       VisionBuf *buf = server.get_buffer(tp);
       if (buf->len != data.size()) {
-        PyErr_SetString(PyExc_AssertionError, "buffer size does not match frame size");
+        PyErr_SetString(PyExc_ValueError, ("expected " + std::to_string(buf->len) + " bytes, got " + std::to_string(data.size())).c_str());
         throw nb::python_error();
       }
+      check_cpu_access(buf->begin_cpu_access(true), "VisionBuf begin_cpu_access failed");
       // The old binding accepted strided byte views as well as contiguous data.
       auto *source = data.data();
       if (data.stride(0) == 1) {
@@ -66,6 +90,7 @@ NB_MODULE(_visionipc, m) {
         for (size_t i = 0; i < data.size(); ++i) target[i] = source[static_cast<int64_t>(i) * data.stride(0)];
       }
       buf->set_frame_id(frame_id);
+      check_cpu_access(buf->end_cpu_access(true), "VisionBuf end_cpu_access failed");
       VisionIpcBufExtra extra = {frame_id, timestamp_sof, timestamp_eof, false};
       server.send(buf, &extra, false);
     }, nb::arg("tp"), nb::arg("data").noconvert(), nb::arg("frame_id") = 0, nb::arg("timestamp_sof") = 0, nb::arg("timestamp_eof") = 0,

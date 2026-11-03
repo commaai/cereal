@@ -35,11 +35,8 @@ msgq = env.Library('msgq', msgq_objects)
 msgq_python = envNanobind.Program(f'msgq/_ipc{python_suffix}', ['msgq/ipc_py.cc', nanobind_lib], LIBS=envNanobind["LIBS"]+[msgq]+common)
 
 # Build Vision IPC
-vipc_files = ['visionipc.cc', 'visionipc_server.cc', 'visionipc_client.cc']
-if File('/dev/ion').exists():
-  vipc_files += ['visionbuf_ion.cc']
-else:
-  vipc_files += ['visionbuf.cc']
+# every buffer backend is built (their kernel UAPI is vendored), and the one the kernel needs is picked at runtime
+vipc_files = ['visionipc.cc', 'visionipc_server.cc', 'visionipc_client.cc', 'visionbuf.cc', 'visionbuf_ion.cc', 'visionbuf_dmabuf.cc']
 vipc_sources = [f'{visionipc_dir.abspath}/{f}' for f in vipc_files]
 
 vipc_objects = env.SharedObject(vipc_sources)
@@ -59,5 +56,6 @@ if "-fsanitize=address" not in env["LINKFLAGS"]:
 
 if GetOption('extras'):
   env.Program('msgq/test_runner', ['msgq/msgq_tests.cc'], LIBS=[msgq]+common)
+  env.Program('msgq/visionipc/test_runner', ['msgq/visionipc/visionbuf_tests.cc'], LIBS=[visionipc]+common)
 
 Export('visionipc', 'msgq', 'msgq_python')
